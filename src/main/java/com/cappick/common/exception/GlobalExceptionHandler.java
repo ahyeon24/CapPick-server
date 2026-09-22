@@ -60,6 +60,16 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "CONTENT_ANALYSIS_UNAVAILABLE", "분석 서비스가 일시적으로 불안정합니다.", true);
     }
 
+    @ExceptionHandler(SearchModelMismatchException.class)
+    public ResponseEntity<ApiErrorResponse> handleSearchModelMismatch(SearchModelMismatchException e) {
+        return error(HttpStatus.CONFLICT, "SEARCH_MODEL_MISMATCH", "검색 임베딩 모델 버전이 서버와 다릅니다.", false);
+    }
+
+    @ExceptionHandler(SearchInterpretationException.class)
+    public ResponseEntity<ApiErrorResponse> handleSearchInterpretationFailed(SearchInterpretationException e) {
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "SEARCH_UNAVAILABLE", "검색 서비스가 일시적으로 불안정합니다.", true);
+    }
+
     private ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message, boolean retryable) {
         String requestId = "req_" + UUID.randomUUID();
         return ResponseEntity.status(status).body(new ApiErrorResponse(new ApiErrorBody(code, message, retryable), requestId));

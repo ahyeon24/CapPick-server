@@ -4,7 +4,7 @@ CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CL
 
 ## 현재 상태
 
-**설치 검증(Installation, App Attest)** 과 **Job(content_analysis, Gemini 연동)** 이 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트와 §4의 `POST /v1/jobs`(content_analysis만) · `GET /v1/jobs/{id}`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인" 절 참고. UsageEntry·DeletionRequest, 나머지 Job kind(folder_criteria/classification/search_document)는 아직 없다.
+**설치 검증(Installation, App Attest)**, **Job(content_analysis, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)** 이 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis만) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "검색어 해석" 절 참고. UsageEntry·DeletionRequest, 나머지 Job kind(folder_criteria/classification/search_document)는 아직 없다.
 
 ## 스택
 
@@ -98,6 +98,45 @@ API 명세 §4의 4개 kind 중 **content_analysis만** 구현했다. 나머지(
 4. **다만 진짜 성공 케이스(분석 결과가 채워진 `SUCCEEDED`)는 이 세션에서 못 봤다** — Gemini 무료 티어 일일 한도(하루 20회, `gemini-3.8-flash` 기준)를 이 세션의 앞선 스파이크 테스트에서 이미 다 써버렸다. `GeminiContentAnalysisClient`의 파싱 로직(요청 조립, 응답 파싱, 스키마)은 `GeminiContentAnalysisClientTest`가 `MockRestServiceServer`로 검증하고, 그 목(mock) 응답은 이 세션에서 실제 Gemini가 준 진짜 응답 형태를 그대로 옮긴 것이다 — 그래도 **엔드투엔드로 진짜 성공 결과가 채워지는 건 무료 티어가 리셋된 뒤(다음날) 다시 확인해야 한다.**
 
 **테스트 (15개 추가, 총 86개 전부 통과):** `JobServiceTest`(5, 멱등성·소유권), `JobStateTransitionsTest`(4, 상태 전이 로직), `AsyncContentAnalysisWorkerTest`(2, 오케스트레이션 — 실제 버그를 재현하진 못하는 한계가 있다는 걸 위 문단에 명시함), `GeminiContentAnalysisClientTest`(4, `MockRestServiceServer`로 실제 검증된 요청/응답 형태 고정).
+
+## 검색어 해석 (`POST /v1/search/prepare`, 2026-09-22)
+
+API 명세 §6. **Job이 아니다** — `content_analysis`처럼 큐잉·폴링하지 않는 동기 요청/응답 하나로 끝난다.
+`domain/search/{SearchController, SearchService, dto/}`, `external/searchinterpretation/{SearchInterpretationClient
+(인터페이스), SearchInterpretationResult, gemini/GeminiSearchInterpretationClient}`.
+
+**실제 캡처 검색(키워드·의미 결합, 폴더·날짜·접근가능 필터)은 서버가 아니라 기기에서 한다** — 이
+엔드포인트는 자연어 질의를 해석해서 `normalized_query`/`lexical_terms`/`captured_from`/`captured_before`/
+`date_interpretation`/`embedding`만 돌려준다. 서버는 스크린샷·폴더 데이터를 전혀 다루지 않는다
+(시스템 설계 §5).
+
+**`GeminiContentAnalysisClient`와 코드를 공유하지 않는다 — 의도적인 중복.** `callGemini()`/구조화
+출력 스키마 패턴은 거의 같지만, 이미지 분석과 검색어 해석이 서로 다른 AI 공급자로 독립적으로 바뀔
+수 있어야 한다는 게(컨벤션 #8) 두 인터페이스를 애초에 나눈 이유라, 구현도 따로 둔다. `GeminiProperties`
+(모델·임베딩모델 설정)만 그대로 재사용한다 — 지금은 같은 Gemini 프로젝트를 쓰지만 우연일 뿐이다.
+
+**`embedding_model_version` 불일치 = 409 `SEARCH_MODEL_MISMATCH`, Gemini 호출 전에 즉시 실패.**
+클라이언트가 로컬 캡처들을 임베딩한 모델 버전을 요청에 실어 보내고, 서버가 지금 쓰는
+`GeminiProperties.embeddingModel()`과 다르면 비교 자체가 무의미해서(차원·공간이 다른 벡터) 바로
+거절한다 — `SearchServiceTest`가 이 경우 Gemini를 아예 안 부르는 것까지 확인한다.
+
+**날짜 해석은 Gemini에게 통째로 맡긴다.** `now`+`timezone`을 프롬프트에 넣고 "지난달"·"어제" 같은
+표현을 ISO-8601 UTC 구간(시작 포함·끝 미포함)으로 계산해 달라고 구조화 출력으로 받는다. 서버가 직접
+자연어 날짜 파싱 라이브러리를 쓰지 않는다 — 프롬프트·스키마가 잘못돼도 `parseInstantOrNull`이
+조용히 null로 떨어뜨려서 검색 자체는 실패시키지 않는다(날짜 조건 없음으로 취급).
+
+**실제 검증 (curl, GEMINI_API_KEY 없이):** 모델 버전 불일치 → 409 `SEARCH_MODEL_MISMATCH` 확인,
+정상 버전인데 키가 없어서 Gemini 호출 실패 → 503 `SEARCH_UNAVAILABLE`(retryable=true) 확인,
+Authorization 헤더 없음 → 400. **실제 Gemini 응답으로 `date_interpretation`·`lexical_terms` 품질을
+검증하는 건 아직 못 했다** — 오늘 이미 무료 한도가 소진된 상태였다. 다음에 `GEMINI_API_KEY`가 있는
+상태로 서버를 띄우면 실제 응답부터 확인할 것 — 프롬프트("검색어 해석 프롬프트", `GeminiSearchInterpretationClient`
+상단)는 실제 스크린샷으로 검증된 `GeminiContentAnalysisClient`의 프롬프트와 달리 **아직 한 번도
+진짜 Gemini 응답으로 확인 안 된 잠정 프롬프트**다.
+
+**테스트 (8개 추가, 총 94개):** `SearchServiceTest`(2, 정상 흐름·모델 불일치 시 Gemini 미호출),
+`GeminiSearchInterpretationClientTest`(6, `MockRestServiceServer` — 요청/응답 형태는 실제
+Gemini로 검증된 게 아니라 `GeminiContentAnalysisClient`의 실제 검증된 형태를 참고해 **추정**한
+것이므로, 실제 응답을 받으면 이 테스트의 스텁 JSON도 맞춰 갱신해야 할 수 있다).
 
 ## 코딩 컨벤션
 
