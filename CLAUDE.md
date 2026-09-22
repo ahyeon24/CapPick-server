@@ -4,12 +4,15 @@ CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CL
 
 ## 현재 상태
 
-Spring Initializr로 생성한 빈 스캐폴딩뿐이다. `CapPickServerApplication`(진입점) 외 기능 코드는 없다. `./gradlew bootRun`으로 로컬 PostgreSQL(`cappick_dev`)에 붙어서 뜨는 것까지 확인했다(엔터티가 없어 아직 아무 API도 없다).
+첫 실제 기능인 **설치 검증(Installation, App Attest)** 이 구현돼 있다 — API 명세 §3의 3개 엔드포인트(`POST /v1/installations/challenges`, `POST /v1/installations`, `POST /v1/installations/credentials/renew`)가 실제로 동작한다. 자세한 내용은 아래 "설치 검증" 절 참고. 그 외 도메인(Job, UsageEntry, DeletionRequest)은 아직 없다.
 
 ## 스택
 
 - Spring Boot 4.1.1, Java 21 (Gradle toolchain), Gradle 9.7.1 wrapper — `last-safe-server`(다른 프로젝트)와 버전 조합을 맞췄다.
-- 의존성: web, data-jpa, validation, lombok, PostgreSQL 드라이버(`org.postgresql:postgresql`, 런타임)
+- 의존성: web, data-jpa, validation, lombok, PostgreSQL 드라이버(`org.postgresql:postgresql`, 런타임), Flyway(`flyway-core`, `flyway-database-postgresql`, `org.springframework.boot:spring-boot-flyway`), App Attest CBOR 파싱용 `com.upokecenter:cbor`
+- **주의 — Spring Boot 4 Flyway 함정**: `flyway-core`만 추가하면 클래스패스에는 있어도 시작 시 마이그레이션이 자동 실행되지 않는다. Boot 4가 `FlywayAutoConfiguration`을 `org.springframework.boot:spring-boot-flyway` 모듈로 분리했기 때문 — 이것도 같이 넣어야 한다. (docs.spring.io/spring-boot/appendix/auto-configuration-classes/spring-boot-flyway.html) 처음엔 이걸 몰라서 앱이 조용히 "Schema validation: missing table" 오류로 죽었다.
+- **스키마 관리: Flyway로 확정 (2026-09-22, Installation이 첫 엔터티인 시점 결정)**. `src/main/resources/db/migration/`에 버전 SQL을 둔다. Hibernate(`ddl-auto=validate`)는 스키마를 만들지 않고 Flyway가 만든 것과 일치하는지만 검증한다.
+- `spring.jackson.property-naming-strategy=SNAKE_CASE`를 전역 설정했다 — API 명세 §2 "JSON 필드명 snake_case"를 DTO마다 `@JsonProperty`로 반복하지 않기 위해서다. DTO는 camelCase로 짜면 된다.
 - **DB 제품: PostgreSQL — 확정(2026-09-15 사용자 결정)**. 처음 스캐폴딩 때 `mysql-connector-j`를 잠정으로 넣었다가, "미정"이라는 문서 상태와 코드 상태가 어긋나 있는 걸 사용자가 지적해서 일단 뺐었다. 이후 MySQL/PostgreSQL 비교 후 사용자가 PostgreSQL로 확정했다 — job 결과·근거(evidence) 같은 반구조화 데이터에 JSONB가 유리하다는 게 근거였다.
 
 ### 로컬 개발 DB
@@ -23,22 +26,43 @@ Spring Initializr로 생성한 빈 스캐폴딩뿐이다. `CapPickServerApplicat
 ```text
 com.cappick
 ├── domain
-│   ├── installation/   — Installation.java, InstallationRepository.java, InstallationService.java
-│   ├── job/            — Job.java, JobKind.java, JobStatus.java, JobRepository.java, JobService.java, JobController.java
-│   ├── usage/          — UsageEntry.java, UsageEntryRepository.java, UsageService.java
-│   └── deletion/       — DeletionRequest.java, DeletionRequestRepository.java, DeletionService.java
+│   ├── installation/   — Installation.java, InstallationStatus.java, InstallationChallenge.java,
+│   │                     InstallationRepository.java, InstallationChallengeRepository.java,
+│   │                     InstallationService.java, InstallationController.java, dto/ (구현됨)
+│   ├── job/            — 아직 없음
+│   ├── usage/          — 아직 없음
+│   └── deletion/       — 아직 없음
 ├── external
-│   ├── ContentAnalysisClient.java (인터페이스, 공급자 미선정)
-│   └── <provider>/     — 실제 공급자 구현체
+│   └── attestation/    — AttestationVerifier.java(인터페이스), AttestationRequest/Outcome,
+│       │                 AssertionRequest/Outcome, DevBypassAttestationVerifier.java (구현됨)
+│       └── apple/      — AppleAppAttestVerifier.java, AppleAppAttestProperties.java,
+│                         AppleAuthenticatorData.java, AppleNonceExtension.java (구현됨)
+│   (ContentAnalysisClient 등 AI 공급자 인터페이스는 아직 없음 — 공급자 미선정)
 ├── common
-│   ├── exception/       — JobNotFoundException 등 도메인 공통 예외
-│   └── response/        — API 공통 오류 응답 포맷
-└── config
+│   ├── exception/       — ChallengeNotFoundException 등 (구현됨, 아래 §12 참고)
+│   └── response/        — ApiErrorBody, ApiErrorResponse, GlobalExceptionHandler (구현됨)
+└── config               — AttestationConfig, ClockConfig (구현됨)
 ```
 
 **주의**: 이전엔 `entity/`, `repository/`를 최상위에 따로 두는 안(layer 기준, last-safe-server 실제 구조와 동일)이었다가 지금 구조(domain 기준, 한 기능의 Entity/Repository/Service/Controller를 같은 폴더에)로 바꿨다. **last-safe-server를 그대로 복제한 게 아니라 의도적으로 다르게 간 것**이다 — CapPick 서버 데이터 모델이 Installation/Job/UsageEntry/DeletionRequest로 책임이 뚜렷이 나뉘어 있어 도메인 중심이 더 맞다고 판단해 사용자가 결정했다. `JobController`까지 `domain/job`에 두는 것도 지금 규모에선 허용한다 — API 계층이 커지면 그때 `api/job` 등으로 분리해도 된다.
 
-지금은 전부 빈 디렉터리다.
+## 설치 검증 (Installation / App Attest)
+
+**결정 사항 (2026-09-22 사용자 확정, 이유는 대화 참고):**
+1. **검증 방식: Apple App Attest + 개발용 우회.** `cappick.attestation.mode`(`application.properties`)가 `development`/`production`이면 실제 Apple 검증(`AppleAppAttestVerifier`), `bypass`면 검증을 건너뛴다(`DevBypassAttestationVerifier`). `AttestationConfig`가 `bypass` + `production` 스프링 프로필 조합이면 시작 자체를 실패시켜서 운영에서 실수로 켜지는 걸 막는다.
+2. **자격 형식: 불투명 랜덤 토큰.** 32바이트 무작위 값을 base64url로 인코딩해 클라이언트에 평문으로 한 번 돌려주고, 서버에는 SHA-256 해시만 저장한다(`Installation.credentialHash`). JWT처럼 자체 서명 검증은 안 하고 매 요청마다 해시로 DB 조회한다 — 그 대신 즉시 폐기(`revoke()`)가 쉽다.
+3. **Apple Developer Program: 아직 미가입.** 그래서 `cappick.attestation.mode=bypass`가 지금 유일하게 쓸 수 있는 값이고, iOS 쪽에서도 진짜 App Attest 호출(`DCAppAttestService`)은 아직 못 만들었다. 가입하면 `CapPick-ios`에 실제 attestKey/generateAssertion 연동을 붙이고, 그 페이로드로 `AppleAppAttestVerifier`를 처음으로 실제 검증해야 한다.
+
+**엔드포인트 (API 명세 §3, 전부 구현·curl로 수동 검증함):**
+- `POST /v1/installations/challenges` — 5분짜리 1회용 challenge 발급 (TTL 잠정치, §14 미정 목록 참고)
+- `POST /v1/installations` — 등록. challenge를 소비하고 `AttestationVerifier.verifyAttestation()` 호출, 성공하면 `Installation` 저장 후 credential 반환(201)
+- `POST /v1/installations/credentials/renew` — 갱신. `Authorization: Bearer <credential>`로 기존 설치를 찾고, 새 challenge + assertion을 검증한 뒤 credential을 교체(신뢰성 있는 재전송 방지를 위해 App Attest 카운터가 반드시 증가해야 함)
+
+**같은 challenge 재사용, 존재하지 않는 credential로 갱신 시도 두 경우 다 curl로 직접 쏴서 409/401이 나오는 것까지 확인했다** — 자동 테스트뿐 아니라 실제 HTTP 응답으로.
+
+**⚠️ AppleAppAttestVerifier는 진짜 Apple 기기 페이로드로 검증 안 됨.** 루트 인증서는 Apple 공식 URL(`https://www.apple.com/certificateauthority/Apple_App_Attestation_Root_CA.pem`)에서 직접 받아 `src/main/resources/apple/app-attest-root-ca.pem`에 넣고 fingerprint까지 확인했지만, CBOR 파싱·인증서 체인 검증·nonce 확장 파싱·공개키 해시 비교·서명 검증 각 단계는 전부 **합성 데이터로 만든 단위 테스트**로만 확인했다(진짜 Apple attestation object가 아님). Apple Developer 계정이 생기고 iOS에서 실제 App Attest 호출을 만들면, 그 페이로드로 이 클래스를 처음 실전 검증해야 한다 — last-safe-server의 `TagoBusPositionClient`가 "실제 키로 호출해 동작 확인은 아직 안 함"이라고 명시한 것과 같은 종류의 미검증이다.
+
+**테스트 (71개, 전부 통과):** `InstallationServiceTest`(9, challenge 생명주기·해시 저장·재전송 방지 등 비즈니스 규칙, Mockito), `AppleNonceExtensionTest`(3)·`AppleAuthenticatorDataTest`(4, 손으로 만든 DER/authData 바이트로 파싱 검증), `EcPointEncodingTest`(50회 반복, EC 공개키 원시 포인트 인코딩·디코딩 왕복 — BigInteger의 leading-zero 버그를 반복 실행으로 잡으려는 목적), `DevBypassAttestationVerifierTest`(4).
 
 ## 코딩 컨벤션
 
@@ -155,7 +179,7 @@ Service는 `ContentAnalysisClient` 같은 인터페이스만 알고 구체적인
 
 ### 12. 예외 — API 오류 코드와 내부 예외를 구분
 
-`RuntimeException` 하나로 뭉뚱그리지 않는다. `JobNotFoundException`, `IdempotencyConflictException`, `QuotaExceededException`, `ResultExpiredException`처럼 의미별로 나누고(`common/exception/`), API에서는 공통 오류 형식(API 명세 §2)을 유지한다.
+`RuntimeException` 하나로 뭉뚱그리지 않는다. `ChallengeNotFoundException`, `ChallengeExpiredException`, `ChallengeAlreadyUsedException`, `AttestationVerificationException`, `InstallationNotFoundException`처럼 의미별로 나누고(`common/exception/`, `GlobalExceptionHandler`가 상태 코드로 매핑), 앞으로 추가할 Job 쪽도 `JobNotFoundException`, `IdempotencyConflictException`, `QuotaExceededException`, `ResultExpiredException`처럼 같은 방식을 따른다. API에서는 공통 오류 형식(API 명세 §2)을 유지한다.
 
 ```json
 {"error":{"code":"QUOTA_EXCEEDED","message":"분석 한도에 도달했습니다.","retryable":false},"request_id":"req_example"}
@@ -186,10 +210,12 @@ Service는 `ContentAnalysisClient` 같은 인터페이스만 알고 구체적인
 
 ## 구현 시작 전 반드시 확인할 미정 사항
 
-전체 목록·원칙은 위 코딩 컨벤션 §14 참고. 그중 스캐폴딩 단계에서 바로 부딪히는 것:
+전체 목록·원칙은 위 코딩 컨벤션 §14 참고. 설치 검증 방식(App Attest+우회)과 스키마 관리(Flyway)는 확정됐으니 목록에서 뺐다. 남은 것:
 
-- **물리 스키마 (ERD §6)**: DB 제품(PostgreSQL)은 확정했지만 실제 테이블·컬럼 설계, 스키마 관리 방식(Flyway/Liquibase vs Hibernate 자동 DDL)은 안 정했다. `application.properties`의 `spring.jpa.hibernate.ddl-auto=validate`는 임의로 스키마를 만들거나 바꾸지 않도록 막아둔 잠정값이다. 엔터티를 실제로 추가하는 시점에 스키마 관리 방식부터 정한다.
-- **설치 단위 인증 방식** (시스템 설계 §7, API 명세 §1): Spring Security를 쓸지 커스텀 필터로 처리할지 미정이라 아직 security 스타터를 추가하지 않았다.
+- **challenge·credential TTL 정확한 값**: `InstallationService`의 `CHALLENGE_TTL`(5분), `CREDENTIAL_TTL`(30일)은 코드에 "잠정치"라고 주석 달아둔 임의 값이다. API 명세 §8 "멱등 키 및 임시 콘텐츠 보존 기간 확정"이 실제 결정 시점이다.
+- **challenge 발급 엔드포인트 호출량 제한**: API 명세 §3 "이 경로도 호출량 제한 대상"이라고 명시돼 있지만 아직 아무 제한도 안 걸려 있다. 지금은 누구나 challenge를 무한정 발급받을 수 있다.
+- **Installation 인증을 다른 도메인에서 쓰는 방법**: `InstallationController`는 자기 자신만 처리한다. Job 등 다른 엔드포인트가 `Authorization` 헤더로 요청자를 식별하려면 Spring Security 필터로 갈지 `HandlerInterceptor`로 갈지 아직 안 정했다. `InstallationService.resolveByCredential()`은 그때 쓰라고 미리 만들어 둔 것.
+- **Spring Security 도입 여부**: 여전히 안 정했다(위와 연결된 결정).
 
 ## 지켜야 할 제약 (루트 CLAUDE.md 요약)
 

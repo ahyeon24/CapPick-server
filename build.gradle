@@ -22,6 +22,13 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.flywaydb:flyway-core'
+	implementation 'org.flywaydb:flyway-database-postgresql'
+	// Spring Boot 4는 FlywayAutoConfiguration을 별도 모듈로 뺐다 — flyway-core만으로는 시작 시
+	// 마이그레이션이 자동 실행되지 않는다(Boot 4 모듈화, docs.spring.io/.../spring-boot-flyway.html).
+	implementation 'org.springframework.boot:spring-boot-flyway'
+	// App Attest attestation object(CBOR) 파싱용. Spring Boot BOM이 관리하지 않아 버전을 직접 지정한다.
+	implementation 'com.upokecenter:cbor:4.5.6'
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'org.postgresql:postgresql'
 	annotationProcessor 'org.projectlombok:lombok'
