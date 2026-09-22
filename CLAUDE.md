@@ -4,13 +4,17 @@ CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CL
 
 ## 현재 상태
 
-첫 실제 기능인 **설치 검증(Installation, App Attest)** 이 구현돼 있다 — API 명세 §3의 3개 엔드포인트(`POST /v1/installations/challenges`, `POST /v1/installations`, `POST /v1/installations/credentials/renew`)가 실제로 동작한다. 자세한 내용은 아래 "설치 검증" 절 참고. 그 외 도메인(Job, UsageEntry, DeletionRequest)은 아직 없다.
+**설치 검증(Installation, App Attest)** 과 **Job(content_analysis, Gemini 연동)** 이 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트와 §4의 `POST /v1/jobs`(content_analysis만) · `GET /v1/jobs/{id}`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인" 절 참고. UsageEntry·DeletionRequest, 나머지 Job kind(folder_criteria/classification/search_document)는 아직 없다.
 
 ## 스택
 
 - Spring Boot 4.1.1, Java 21 (Gradle toolchain), Gradle 9.7.1 wrapper — `last-safe-server`(다른 프로젝트)와 버전 조합을 맞췄다.
-- 의존성: web, data-jpa, validation, lombok, PostgreSQL 드라이버(`org.postgresql:postgresql`, 런타임), Flyway(`flyway-core`, `flyway-database-postgresql`, `org.springframework.boot:spring-boot-flyway`), App Attest CBOR 파싱용 `com.upokecenter:cbor`
-- **주의 — Spring Boot 4 Flyway 함정**: `flyway-core`만 추가하면 클래스패스에는 있어도 시작 시 마이그레이션이 자동 실행되지 않는다. Boot 4가 `FlywayAutoConfiguration`을 `org.springframework.boot:spring-boot-flyway` 모듈로 분리했기 때문 — 이것도 같이 넣어야 한다. (docs.spring.io/spring-boot/appendix/auto-configuration-classes/spring-boot-flyway.html) 처음엔 이걸 몰라서 앱이 조용히 "Schema validation: missing table" 오류로 죽었다.
+- 의존성: web, data-jpa, validation, lombok, PostgreSQL 드라이버(`org.postgresql:postgresql`, 런타임), Flyway(`flyway-core`, `flyway-database-postgresql`, `org.springframework.boot:spring-boot-flyway`), App Attest CBOR 파싱용 `com.upokecenter:cbor`, `org.springframework.boot:spring-boot-starter-restclient`(아래 참고)
+- **주의 — Spring Boot 4는 스타터를 잘게 쪼개서, "당연히 딸려올 것"이 안 딸려오는 경우가 있다.** 두 번 겪었다:
+  - `flyway-core`만 추가하면 클래스패스에는 있어도 시작 시 마이그레이션이 자동 실행되지 않는다. `FlywayAutoConfiguration`이 `org.springframework.boot:spring-boot-flyway` 모듈로 분리됐다(docs.spring.io/spring-boot/appendix/auto-configuration-classes/spring-boot-flyway.html) — 처음엔 이걸 몰라서 앱이 조용히 "Schema validation: missing table" 오류로 죽었다.
+  - `spring-boot-starter-webmvc`만으로는 `RestClient.Builder`가 빈으로 안 뜬다. `RestClientAutoConfiguration`도 Boot 4.1부터 `org.springframework.boot:spring-boot-starter-restclient`로 빠졌다(spring-projects/spring-boot#50768). `GeminiContentAnalysisClient`가 이 빈을 필요로 해서 처음엔 `@SpringBootTest`가 `NoSuchBeanDefinitionException`으로 죽었다.
+  - 새 외부 라이브러리를 추가했는데 빈이 안 뜨거나 자동 설정이 안 먹으면, 이 문제부터 의심할 것.
+- **Jackson 3.x 주의**: Boot 4.1은 Jackson 2.x가 아니라 **3.x**를 쓴다. 패키지가 `com.fasterxml.jackson.databind.*` → `tools.jackson.databind.*`(core/databind만, `jackson-annotations`는 그대로 `com.fasterxml.jackson.annotation.*`)로 바뀌었고, `JsonProcessingException`(checked)은 없어지고 `JacksonException`(unchecked)으로 통합됐다. `JsonNode.asText()`도 deprecated — `asString()`을 쓴다.
 - **스키마 관리: Flyway로 확정 (2026-09-22, Installation이 첫 엔터티인 시점 결정)**. `src/main/resources/db/migration/`에 버전 SQL을 둔다. Hibernate(`ddl-auto=validate`)는 스키마를 만들지 않고 Flyway가 만든 것과 일치하는지만 검증한다.
 - `spring.jackson.property-naming-strategy=SNAKE_CASE`를 전역 설정했다 — API 명세 §2 "JSON 필드명 snake_case"를 DTO마다 `@JsonProperty`로 반복하지 않기 위해서다. DTO는 camelCase로 짜면 된다.
 - **DB 제품: PostgreSQL — 확정(2026-09-15 사용자 결정)**. 처음 스캐폴딩 때 `mysql-connector-j`를 잠정으로 넣었다가, "미정"이라는 문서 상태와 코드 상태가 어긋나 있는 걸 사용자가 지적해서 일단 뺐었다. 이후 MySQL/PostgreSQL 비교 후 사용자가 PostgreSQL로 확정했다 — job 결과·근거(evidence) 같은 반구조화 데이터에 JSONB가 유리하다는 게 근거였다.
@@ -29,19 +33,23 @@ com.cappick
 │   ├── installation/   — Installation.java, InstallationStatus.java, InstallationChallenge.java,
 │   │                     InstallationRepository.java, InstallationChallengeRepository.java,
 │   │                     InstallationService.java, InstallationController.java, dto/ (구현됨)
-│   ├── job/            — 아직 없음
+│   ├── job/            — Job.java, JobKind.java, JobStatus.java, JobRepository.java,
+│   │                     JobService.java, JobController.java, ContentAnalysisWorker.java(인터페이스),
+│   │                     AsyncContentAnalysisWorker.java, JobStateTransitions.java, dto/ (구현됨 — content_analysis만)
 │   ├── usage/          — 아직 없음
 │   └── deletion/       — 아직 없음
 ├── external
-│   └── attestation/    — AttestationVerifier.java(인터페이스), AttestationRequest/Outcome,
-│       │                 AssertionRequest/Outcome, DevBypassAttestationVerifier.java (구현됨)
-│       └── apple/      — AppleAppAttestVerifier.java, AppleAppAttestProperties.java,
-│                         AppleAuthenticatorData.java, AppleNonceExtension.java (구현됨)
-│   (ContentAnalysisClient 등 AI 공급자 인터페이스는 아직 없음 — 공급자 미선정)
+│   ├── attestation/    — AttestationVerifier.java(인터페이스), AttestationRequest/Outcome,
+│   │   │                 AssertionRequest/Outcome, DevBypassAttestationVerifier.java (구현됨)
+│   │   └── apple/      — AppleAppAttestVerifier.java, AppleAppAttestProperties.java,
+│   │                     AppleAuthenticatorData.java, AppleNonceExtension.java (구현됨)
+│   └── contentanalysis/ — ContentAnalysisClient.java(인터페이스), ContentAnalysisRequest/Result (구현됨)
+│       └── gemini/     — GeminiContentAnalysisClient.java, GeminiProperties.java (구현됨)
 ├── common
+│   ├── AuthorizationHeaders.java — Authorization: Bearer 파싱 (구현됨, 여러 컨트롤러가 공유)
 │   ├── exception/       — ChallengeNotFoundException 등 (구현됨, 아래 §12 참고)
 │   └── response/        — ApiErrorBody, ApiErrorResponse, GlobalExceptionHandler (구현됨)
-└── config               — AttestationConfig, ClockConfig (구현됨)
+└── config               — AttestationConfig, ClockConfig, AiConfig, AsyncConfig (구현됨)
 ```
 
 **주의**: 이전엔 `entity/`, `repository/`를 최상위에 따로 두는 안(layer 기준, last-safe-server 실제 구조와 동일)이었다가 지금 구조(domain 기준, 한 기능의 Entity/Repository/Service/Controller를 같은 폴더에)로 바꿨다. **last-safe-server를 그대로 복제한 게 아니라 의도적으로 다르게 간 것**이다 — CapPick 서버 데이터 모델이 Installation/Job/UsageEntry/DeletionRequest로 책임이 뚜렷이 나뉘어 있어 도메인 중심이 더 맞다고 판단해 사용자가 결정했다. `JobController`까지 `domain/job`에 두는 것도 지금 규모에선 허용한다 — API 계층이 커지면 그때 `api/job` 등으로 분리해도 된다.
@@ -63,6 +71,31 @@ com.cappick
 **⚠️ AppleAppAttestVerifier는 진짜 Apple 기기 페이로드로 검증 안 됨.** 루트 인증서는 Apple 공식 URL(`https://www.apple.com/certificateauthority/Apple_App_Attestation_Root_CA.pem`)에서 직접 받아 `src/main/resources/apple/app-attest-root-ca.pem`에 넣고 fingerprint까지 확인했지만, CBOR 파싱·인증서 체인 검증·nonce 확장 파싱·공개키 해시 비교·서명 검증 각 단계는 전부 **합성 데이터로 만든 단위 테스트**로만 확인했다(진짜 Apple attestation object가 아님). Apple Developer 계정이 생기고 iOS에서 실제 App Attest 호출을 만들면, 그 페이로드로 이 클래스를 처음 실전 검증해야 한다 — last-safe-server의 `TagoBusPositionClient`가 "실제 키로 호출해 동작 확인은 아직 안 함"이라고 명시한 것과 같은 종류의 미검증이다.
 
 **테스트 (71개, 전부 통과):** `InstallationServiceTest`(9, challenge 생명주기·해시 저장·재전송 방지 등 비즈니스 규칙, Mockito), `AppleNonceExtensionTest`(3)·`AppleAuthenticatorDataTest`(4, 손으로 만든 DER/authData 바이트로 파싱 검증), `EcPointEncodingTest`(50회 반복, EC 공개키 원시 포인트 인코딩·디코딩 왕복 — BigInteger의 leading-zero 버그를 반복 실행으로 잡으려는 목적), `DevBypassAttestationVerifierTest`(4).
+
+## Job 도메인 (content_analysis, 2026-09-22)
+
+API 명세 §4의 4개 kind 중 **content_analysis만** 구현했다. 나머지(folder_criteria, classification, search_document)는 아직 없다.
+
+**AI 공급자: Gemini로 우선 시작 (사용자 결정, [[project-cappick]] 메모리 참고).** 추후 OpenAI와 비용·품질을 실제로 비교해볼 예정이라 **최종 결정 아님** — 그래서 `ContentAnalysisClient` 인터페이스 뒤에 `GeminiContentAnalysisClient` 하나만 두고, Service·Worker는 이 인터페이스만 안다. 공급자를 바꾸는 비용은 새 구현체 하나 추가하는 정도가 되게 하려는 목적이다.
+
+**ERD·API 명세와 의도적으로 다르게 단순화한 부분** (Job.java 클래스 주석에도 있음):
+- ERD의 `input_reference`/`input_expires_at`/`lease_until`은 아직 안 만들었다 — 별도 워커 프로세스·블롭 스토리지가 없어서 이미지를 저장할 필요 자체가 없다(요청과 같은 JVM 프로세스 안에서 바로 처리). 진짜 워커·큐를 도입하면 그때 이 필드들이 필요해진다.
+- `result_reference`(별도 저장소 참조) 대신 결과 JSON을 `Job.result_json` 컬럼에 그대로 저장한다.
+- `analysis_revision`(응답 필드)은 서버가 계산할 근거가 없어서 요청의 `content_revision`을 그대로 돌려주는 것으로 해석했다 — API 명세에 규칙이 없어 추정한 부분(`ContentAnalysisResultDTO` 주석).
+
+**흐름**: `POST /v1/jobs`(multipart: `metadata` JSON 파트 + `image` 파일 파트, `Idempotency-Key`·`Authorization` 헤더 필수) → `JobService`가 같은 Installation+키로 기존 작업 있는지 확인(다르면 409, 같으면 기존 job 반환) → 없으면 QUEUED로 저장, `ContentAnalysisWorker.run()`을 비동기로 트리거, 202 즉시 응답 → `GET /v1/jobs/{id}`로 폴링.
+
+**워커 = 지금은 그냥 스레드풀 (`AsyncConfig`, `@Async("jobExecutor")`).** 시스템 설계 §2 "메시지 큐는 부하 검증 후 결정, DB Job 테이블 기반으로 시작 가능"대로다. 서버가 재시작되면 진행 중이던 작업은 유실된다 — lease·재수집이 없다. 진짜 워커/큐를 붙일 때 다시 설계해야 한다.
+
+**⚠️ 실제로 겪은 버그 — Spring self-invocation.** 처음엔 `AsyncContentAnalysisWorker` 안에 `markRunning`/`markSucceeded`/`markFailed`를 `@Transactional` 메서드로 두고 `run()`에서 `this.markRunning(...)` 식으로 불렀다. **컴파일도, Mockito 단위 테스트도 다 통과했지만, 실제로 서버를 띄워 진짜 Gemini 호출까지 돌려보니 실패했다**: `this.` 자기 자신 호출은 Spring의 트랜잭션 프록시를 안 거쳐서 `@Transactional`이 조용히 무시되고, `markRunning()`이 DB에 반영 안 된 채로 `markFailed()`가 "RUNNING이어야 하는데 QUEUED"라며 크래시했다. Mockito 테스트는 애초에 프록시가 없는 순수 객체라 이 버그를 잡을 수 없는 구조였다 — **실제 서버로 끝까지 돌려본 게 아니었으면 몰랐을 버그**. 상태 전이 세 메서드를 별도 빈(`JobStateTransitions`)으로 빼서 고쳤다 — `JobStateTransitions` 클래스 주석에 원인을 남겨뒀다. 앞으로 같은 클래스 안에서 `@Transactional`/`@Async` 메서드를 `this.`로 호출하는 코드를 보면 의심할 것.
+
+**실제 검증 (curl + 진짜 Gemini API):**
+1. 설치 등록 → `POST /v1/jobs`로 실제 스크린샷 제출 → 202 확인
+2. 자기 수정 전: 위 self-invocation 버그로 크래시하는 것 확인 → 고침 → 재검증
+3. 고친 뒤: 실제 서버가 실제 Gemini에 요청을 보내고, **의도한 실패 경로(429 quota 초과 → `FAILED` + `error.code=ANALYSIS_FAILED`)가 API 명세 §2 형식 그대로 클라이언트에 나가는 것까지 확인했다.**
+4. **다만 진짜 성공 케이스(분석 결과가 채워진 `SUCCEEDED`)는 이 세션에서 못 봤다** — Gemini 무료 티어 일일 한도(하루 20회, `gemini-3.8-flash` 기준)를 이 세션의 앞선 스파이크 테스트에서 이미 다 써버렸다. `GeminiContentAnalysisClient`의 파싱 로직(요청 조립, 응답 파싱, 스키마)은 `GeminiContentAnalysisClientTest`가 `MockRestServiceServer`로 검증하고, 그 목(mock) 응답은 이 세션에서 실제 Gemini가 준 진짜 응답 형태를 그대로 옮긴 것이다 — 그래도 **엔드투엔드로 진짜 성공 결과가 채워지는 건 무료 티어가 리셋된 뒤(다음날) 다시 확인해야 한다.**
+
+**테스트 (15개 추가, 총 86개 전부 통과):** `JobServiceTest`(5, 멱등성·소유권), `JobStateTransitionsTest`(4, 상태 전이 로직), `AsyncContentAnalysisWorkerTest`(2, 오케스트레이션 — 실제 버그를 재현하진 못하는 한계가 있다는 걸 위 문단에 명시함), `GeminiContentAnalysisClientTest`(4, `MockRestServiceServer`로 실제 검증된 요청/응답 형태 고정).
 
 ## 코딩 컨벤션
 
@@ -214,8 +247,10 @@ Service는 `ContentAnalysisClient` 같은 인터페이스만 알고 구체적인
 
 - **challenge·credential TTL 정확한 값**: `InstallationService`의 `CHALLENGE_TTL`(5분), `CREDENTIAL_TTL`(30일)은 코드에 "잠정치"라고 주석 달아둔 임의 값이다. API 명세 §8 "멱등 키 및 임시 콘텐츠 보존 기간 확정"이 실제 결정 시점이다.
 - **challenge 발급 엔드포인트 호출량 제한**: API 명세 §3 "이 경로도 호출량 제한 대상"이라고 명시돼 있지만 아직 아무 제한도 안 걸려 있다. 지금은 누구나 challenge를 무한정 발급받을 수 있다.
-- **Installation 인증을 다른 도메인에서 쓰는 방법**: `InstallationController`는 자기 자신만 처리한다. Job 등 다른 엔드포인트가 `Authorization` 헤더로 요청자를 식별하려면 Spring Security 필터로 갈지 `HandlerInterceptor`로 갈지 아직 안 정했다. `InstallationService.resolveByCredential()`은 그때 쓰라고 미리 만들어 둔 것.
-- **Spring Security 도입 여부**: 여전히 안 정했다(위와 연결된 결정).
+- **Spring Security 도입 여부**: 아직 안 정했다. 지금은 `JobController`도 `InstallationController`처럼 `AuthorizationHeaders` + `InstallationService.resolveByCredential()`을 컨트롤러에서 직접 부르는 수작업 방식이다 — 컨트롤러가 늘어나면 필터/인터셉터로 공통화할지 정해야 한다.
+- **AI 결과 result_json 보존 기간·워커 재시도 정책**: `JobStateTransitions.RESULT_TTL`(24시간)은 잠정치다. 작업 실패 시 재시도 정책(자동 재시도 여부, 횟수)도 아직 없다 — 지금은 실패하면 그냥 FAILED로 끝난다.
+- **content_analysis 외 kind가 생겼을 때의 컨트롤러 구조**: `POST /v1/jobs`가 지금은 multipart 전용이다. API 명세는 "다른 kind는 application/json"이라고 하는데, 같은 경로에서 Content-Type으로 분기할지 별도 하위 경로로 나눌지 안 정했다.
+- **워커/큐 도입 시점**: `AsyncConfig`는 인프로세스 스레드풀일 뿐이다 — 서버가 죽으면 진행 중이던 job은 유실된다. 언제 진짜 큐(+ lease·재수집)로 옮길지는 트래픽을 보고 정한다(시스템 설계 §2).
 
 ## 지켜야 할 제약 (루트 CLAUDE.md 요약)
 

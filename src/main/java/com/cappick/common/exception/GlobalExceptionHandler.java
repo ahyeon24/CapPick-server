@@ -45,6 +45,21 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", e.getMessage(), false);
     }
 
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<ApiErrorResponse> handleIdempotencyConflict(IdempotencyConflictException e) {
+        return error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "같은 Idempotency-Key를 다른 요청 내용으로 재사용했습니다.", false);
+    }
+
+    @ExceptionHandler(JobNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleJobNotFound(JobNotFoundException e) {
+        return error(HttpStatus.NOT_FOUND, "JOB_NOT_FOUND", "작업을 찾을 수 없습니다.", false);
+    }
+
+    @ExceptionHandler(ContentAnalysisException.class)
+    public ResponseEntity<ApiErrorResponse> handleContentAnalysisFailed(ContentAnalysisException e) {
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "CONTENT_ANALYSIS_UNAVAILABLE", "분석 서비스가 일시적으로 불안정합니다.", true);
+    }
+
     private ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message, boolean retryable) {
         String requestId = "req_" + UUID.randomUUID();
         return ResponseEntity.status(status).body(new ApiErrorResponse(new ApiErrorBody(code, message, retryable), requestId));

@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 
-import com.cappick.common.exception.InstallationNotFoundException;
+import com.cappick.common.AuthorizationHeaders;
 import com.cappick.common.exception.InvalidRequestException;
 import com.cappick.domain.installation.dto.ChallengeResponse;
 import com.cappick.domain.installation.dto.CredentialRenewRequest;
@@ -50,7 +50,7 @@ public class InstallationController {
         @RequestHeader("Authorization") String authorization,
         @Valid @RequestBody CredentialRenewRequest request
     ) {
-        String credential = extractBearerToken(authorization);
+        String credential = AuthorizationHeaders.extractBearerToken(authorization);
         InstallationService.CredentialRenewed renewed = installationService.renew(
             credential, request.challengeId(), decodeBase64(request.assertionObject()));
         return ResponseEntity.ok(new CredentialRenewResponse(renewed.credential(), renewed.expiresAt()));
@@ -62,12 +62,5 @@ public class InstallationController {
         } catch (IllegalArgumentException e) {
             throw new InvalidRequestException("malformed base64 field");
         }
-    }
-
-    private static String extractBearerToken(String authorizationHeader) {
-        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
-            throw new InstallationNotFoundException("missing bearer credential");
-        }
-        return authorizationHeader.substring("Bearer ".length());
     }
 }

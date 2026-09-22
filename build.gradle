@@ -22,6 +22,9 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	// Boot 4.1은 RestClientAutoConfiguration(RestClient.Builder 빈)을 별도 모듈로 뺐다 —
+	// spring-boot-starter-webmvc만으론 안 딸려온다(Flyway와 같은 종류의 모듈화 함정).
+	implementation 'org.springframework.boot:spring-boot-starter-restclient'
 	implementation 'org.flywaydb:flyway-core'
 	implementation 'org.flywaydb:flyway-database-postgresql'
 	// Spring Boot 4는 FlywayAutoConfiguration을 별도 모듈로 뺐다 — flyway-core만으로는 시작 시
