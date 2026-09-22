@@ -10,6 +10,8 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -73,11 +75,23 @@ public class JobService {
             .build();
         jobs.save(job);
 
-        // 이 트랜잭션이 커밋된 뒤에 워커가 조회할 수 있어야 한다 — @Async는 여기서 트랜잭션과
-        // 무관하게 즉시 스레드를 띄우므로, save()가 실제 DB에 반영된 뒤(커밋 후)에 실행되도록
-        // 하려면 원래 TransactionSynchronization을 써야 하지만, 지금은 in-process 스레드풀이라
-        // 커밋 직후에 워커가 findById해도 대부분 안전하다 — 별도 워커/큐로 옮길 때 다시 볼 것.
-        contentAnalysisWorker.run(job.getId(), imageBytes, metadata.ocrText());
+        // 이 트랜잭션이 커밋된 뒤에야 워커를 띄운다. @Async는 여기서 호출하는 즉시 다른 스레드를
+        // 띄우는데, 이 메서드의 트랜잭션은 그 스레드보다 먼저 커밋된다는 보장이 없다 — 실제로
+        // 커밋 전에 워커 스레드가 먼저 findById를 실행해 아직 안 보이는 job을 못 찾고(ifPresent가
+        // 조용히 no-op), 그 뒤 rows가 커밋된 뒤에야 도는 markFailed가 "RUNNING이어야 하는데
+        // QUEUED"로 터지는 레이스를 2026-09-22에 실제 서버로 재현했다. afterCommit()으로 미루면
+        // 워커가 findById할 때 job이 항상 보장된다. 동기화가 활성화 안 된 컨텍스트(예: 단위
+        // 테스트에서 트랜잭션 프록시 없이 이 메서드를 직접 호출하는 경우)에서는 예전처럼 바로 띄운다.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    contentAnalysisWorker.run(job.getId(), imageBytes, metadata.ocrText());
+                }
+            });
+        } else {
+            contentAnalysisWorker.run(job.getId(), imageBytes, metadata.ocrText());
+        }
 
         return new JobSubmitted(job.getId(), job.getStatus(), POLL_AFTER_SECONDS);
     }
