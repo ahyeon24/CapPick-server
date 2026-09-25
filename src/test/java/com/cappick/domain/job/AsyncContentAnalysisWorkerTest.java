@@ -1,5 +1,6 @@
 package com.cappick.domain.job;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -10,11 +11,13 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.cappick.external.contentanalysis.ContentAnalysisClient;
+import com.cappick.external.contentanalysis.ContentAnalysisRequest;
 import com.cappick.external.contentanalysis.ContentAnalysisResult;
 
 // 상태 전이의 실제 로직은 JobStateTransitionsTest가 검증한다. 여기서는 run()이 올바른
@@ -37,18 +40,33 @@ class AsyncContentAnalysisWorkerTest {
             "ocr", List.of("evidence"), "search", List.of(0.1), "embed-v1");
         when(contentAnalysisClient.analyze(any())).thenReturn(result);
 
-        worker.run("job-1", new byte[]{1, 2, 3}, "hint");
+        worker.run("job-1", new byte[]{1, 2, 3}, "image/jpeg", "hint");
 
         verify(transitions).markRunning("job-1");
         verify(transitions).markSucceeded("job-1", result);
         verify(transitions, never()).markFailed(eq("job-1"), any());
     }
 
+    // 앱이 실제로 보내는 형식(JPEG)을 서버가 Gemini에 "image/png"로 하드코딩해 알려주던 버그가
+    // 있었다(2026-09-25 발견) — mimeType이 run() 호출자가 준 값 그대로 전달되는지 고정한다.
+    @Test
+    void passesThroughTheActualMimeTypeInsteadOfHardcodingIt() {
+        ContentAnalysisResult result = new ContentAnalysisResult(
+            "ocr", List.of(), "search", List.of(), "embed-v1");
+        when(contentAnalysisClient.analyze(any())).thenReturn(result);
+        ArgumentCaptor<ContentAnalysisRequest> captor = ArgumentCaptor.forClass(ContentAnalysisRequest.class);
+
+        worker.run("job-1", new byte[]{1, 2, 3}, "image/jpeg", null);
+
+        verify(contentAnalysisClient).analyze(captor.capture());
+        assertEquals("image/jpeg", captor.getValue().mimeType());
+    }
+
     @Test
     void failedAnalysisMarksRunningThenFailedWithoutLeakingExceptionDetails() {
         when(contentAnalysisClient.analyze(any())).thenThrow(new RuntimeException("network boom"));
 
-        worker.run("job-1", new byte[]{1, 2, 3}, null);
+        worker.run("job-1", new byte[]{1, 2, 3}, "image/jpeg", null);
 
         verify(transitions).markRunning("job-1");
         verify(transitions).markFailed("job-1", "ANALYSIS_FAILED");

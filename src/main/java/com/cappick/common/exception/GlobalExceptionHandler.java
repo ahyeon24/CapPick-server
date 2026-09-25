@@ -60,6 +60,11 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "CONTENT_ANALYSIS_UNAVAILABLE", "분석 서비스가 일시적으로 불안정합니다.", true);
     }
 
+    @ExceptionHandler(ClassificationException.class)
+    public ResponseEntity<ApiErrorResponse> handleClassificationFailed(ClassificationException e) {
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "CLASSIFICATION_UNAVAILABLE", "분류 서비스가 일시적으로 불안정합니다.", true);
+    }
+
     @ExceptionHandler(SearchModelMismatchException.class)
     public ResponseEntity<ApiErrorResponse> handleSearchModelMismatch(SearchModelMismatchException e) {
         return error(HttpStatus.CONFLICT, "SEARCH_MODEL_MISMATCH", "검색 임베딩 모델 버전이 서버와 다릅니다.", false);

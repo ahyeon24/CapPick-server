@@ -4,7 +4,7 @@ CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CL
 
 ## 현재 상태
 
-**설치 검증(Installation, App Attest)**, **Job(content_analysis, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)** 이 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis만) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "검색어 해석" 절 참고. UsageEntry·DeletionRequest, 나머지 Job kind(folder_criteria/classification/search_document)는 아직 없다.
+**설치 검증(Installation, App Attest)**, **Job(content_analysis·classification, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)** 이 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis·classification) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "자동 분류", "검색어 해석" 절 참고. UsageEntry·DeletionRequest, 나머지 Job kind(folder_criteria/search_document)는 아직 없다.
 
 ## 스택
 
@@ -91,13 +91,69 @@ API 명세 §4의 4개 kind 중 **content_analysis만** 구현했다. 나머지(
 
 **⚠️ 실제로 겪은 버그 2 — 같은 증상, 다른 원인: 트랜잭션 커밋 전에 `@Async` 워커를 띄움 (2026-09-22 수정, `JobService.submitContentAnalysis`).** 버그 1을 고친 뒤에도 "expected status RUNNING but was QUEUED" 예외가 **다시** 발생했다(iOS 자동 분석 큐를 실제로 돌려보다가 재현). 원인은 달랐다: `submitContentAnalysis()`가 `@Transactional`인데, 그 메서드 안에서 `jobs.save(job)` 직후 곧바로 `contentAnalysisWorker.run(...)`(`@Async`)을 호출하고 있었다. `@Async` 호출은 그 자리에서 바로 별도 스레드를 띄우는데, 감싸고 있는 `submitContentAnalysis()`의 트랜잭션은 메서드가 끝나야(즉 `run()` 호출이 리턴된 뒤) 커밋된다 — 그 사이에 워커 스레드가 먼저 `findById`를 실행하면 아직 커밋 안 된 job을 못 찾고 `markRunning`이 `Optional.ifPresent`로 조용히 no-op된다. 그 뒤 트랜잭션이 커밋되고 Gemini 호출이 끝나 `markFailed`가 도는 시점엔 job이 여전히 QUEUED라 `Job.requireStatus(RUNNING)`이 터진다. (당시 주석에 "커밋 직후에 워커가 findById해도 대부분 안전하다"고 위험을 인지하고도 넘어갔던 부분 — "대부분"이 문제였다.) `TransactionSynchronizationManager.registerSynchronization(...)`의 `afterCommit()` 콜백으로 워커 실행을 미뤄서 고쳤다 — 트랜잭션 동기화가 비활성 상태(Mockito 단위 테스트처럼 프록시 없이 직접 호출하는 경우)면 예전처럼 즉시 실행하는 폴백도 남겨뒀다. curl로 직접 6개 job을 연속 제출해 `IllegalStateException` 0건인 것까지 확인했다. **버그 1과 2는 증상(같은 예외 메시지)은 같지만 원인이 다르다** — self-invocation과 트랜잭션-커밋 타이밍은 둘 다 "@Async를 트랜잭션 경계와 무관하게 다룰 때" 생기는 별개의 함정이다.
 
+**⚠️ 실제로 겪은 버그 3 — Gemini에 보내는 mime_type을 실제 형식과 무관하게 "image/png"로 하드코딩 (2026-09-25 발견·수정).** iOS 앱은 스크린샷을 정확히 JPEG로 인코딩해서 멀티파트 `image` 파트를 `Content-Type: image/jpeg`로 보내는데, `AsyncContentAnalysisWorker.run()`이 `ContentAnalysisRequest`를 만들 때 실제 형식을 안 보고 `"image/png"`를 그대로 박아 넣고 있었다 — 즉 서버가 Gemini에게 "이 바이트는 PNG다"라고 매번 거짓으로 알려주고 있었다. 재시도가 반복적으로 503("This model is currently experiencing high demand")로 실패하는 걸 보고 "혹시 우리 버그 아니냐"고 의심하다가 발견했다(사용자가 재확인을 요청한 덕분). **다만 리서치로 확인한 결과 이 mime_type 불일치가 503의 원인은 아니다** — Gemini API 개발자 포럼의 여러 독립된 사례(전혀 다른 요청·페이로드)가 똑같은 503 문구를 보고하고, 유료 티어에서도 30일간 37% 실패율을 겪은 사례까지 있어 이건 잘못된 입력이 아니라 모델 자체의 용량 부족(특히 `gemini-flash-latest` 같은 alias가 방금 나온 신규 모델을 가리킬 때 흔함, 출시 후 1~3주 지속 보고됨)이 원인이다 — 입력이 잘못됐다면 503이 아니라 400으로 나왔을 것이다. **그래도 이 mime_type 불일치는 별개로 명백한 버그라 고쳤다** — `JobController`가 `MultipartFile.getContentType()`을 그대로 `JobService.submitContentAnalysis(...)`→`ContentAnalysisWorker.run(...)`까지 흘려보내고, 없으면 `image/jpeg`로 기본값을 둔다(하드코딩된 값을 없애되, 실제로 클라이언트가 항상 보내는 형식으로 기본값을 맞춤). `AsyncContentAnalysisWorkerTest`에 mimeType이 그대로 전달되는지 고정하는 회귀 테스트를 추가했다.
+
 **실제 검증 (curl + 진짜 Gemini API):**
 1. 설치 등록 → `POST /v1/jobs`로 실제 스크린샷 제출 → 202 확인
 2. 자기 수정 전: 위 self-invocation 버그로 크래시하는 것 확인 → 고침 → 재검증
 3. 고친 뒤: 실제 서버가 실제 Gemini에 요청을 보내고, **의도한 실패 경로(429 quota 초과 → `FAILED` + `error.code=ANALYSIS_FAILED`)가 API 명세 §2 형식 그대로 클라이언트에 나가는 것까지 확인했다.**
-4. **다만 진짜 성공 케이스(분석 결과가 채워진 `SUCCEEDED`)는 이 세션에서 못 봤다** — Gemini 무료 티어 일일 한도(하루 20회, `gemini-3.8-flash` 기준)를 이 세션의 앞선 스파이크 테스트에서 이미 다 써버렸다. `GeminiContentAnalysisClient`의 파싱 로직(요청 조립, 응답 파싱, 스키마)은 `GeminiContentAnalysisClientTest`가 `MockRestServiceServer`로 검증하고, 그 목(mock) 응답은 이 세션에서 실제 Gemini가 준 진짜 응답 형태를 그대로 옮긴 것이다 — 그래도 **엔드투엔드로 진짜 성공 결과가 채워지는 건 무료 티어가 리셋된 뒤(다음날) 다시 확인해야 한다.**
+4. **진짜 성공 케이스(2026-09-25 재검증) — 확인 완료.** 같은 날 앞서 `gemini-flash-latest`(→`gemini-3.8-flash`, 9월 2일 출시)와 `gemini-3.7-flash` 둘 다 반복적으로 503 "high demand"로 실패했다(job 4개 연속, 모두 실제로 Gemini까지 갔다 온 3~4초대 응답 — 우리 쪽 버그가 아니라 외부 리서치로 "신규 모델 출시 직후 1~3주 흔한 과부하" 패턴임을 확인). 모델을 `gemini-3.5-flash`(2026-05-19 출시, 더 오래돼서 붐빌 이유가 적은 버전)로 바꾸자 바로 성공했다 — job `a825748f-621b-466f-babb-a793c246db89`, 13초 만에 `SUCCEEDED`, `ocr_text`·`observed_evidence`·`search_text`·`embedding` 전부 실제 스크린샷(사주 명리 앱 화면) 내용과 정확히 일치하는 진짜 값으로 채워짐. **현재 `cappick.ai.gemini.model=gemini-3.5-flash`로 고정돼 있다** — AI 공급자·모델 최종 확정은 여전히 아니고, 신규 모델(3.8) 과부하가 가라앉으면 alias로 되돌릴 수 있다.
 
 **테스트 (15개 추가, 총 86개 전부 통과):** `JobServiceTest`(5, 멱등성·소유권), `JobStateTransitionsTest`(4, 상태 전이 로직), `AsyncContentAnalysisWorkerTest`(2, 오케스트레이션 — 실제 버그를 재현하진 못하는 한계가 있다는 걸 위 문단에 명시함), `GeminiContentAnalysisClientTest`(4, `MockRestServiceServer`로 실제 검증된 요청/응답 형태 고정).
+
+## 자동 분류 (`classification` Job kind, AI-03, 2026-09-25)
+
+API 명세 §4 4개 kind 중 **classification**을 content_analysis에 이어 구현했다(folder_criteria·
+search_document는 아직 없음). 기능명세서 §3.3.1 "직접 근거 기반 분류 규칙"(간접 연관성만으로
+소속을 추측하지 않음, 여러 폴더에 각각 근거가 있으면 모두 match 가능, AI가 새 폴더를 추천·생성
+하지 않음)을 그대로 프롬프트에 옮겼다 — `GeminiClassificationClient.RULES` 상단 주석·본문 참고.
+
+**흐름은 content_analysis와 다르다 — 이미지가 아니라 텍스트만 오간다.** classification은
+`POST /v1/jobs`를 그대로 쓰지만 **`application/json`**이다(content_analysis는 multipart).
+`JobController`가 `Content-Type`으로 두 메서드를 나눈다 — 지금은 JSON kind가 classification
+하나뿐이라 바로 그 DTO로 바인딩하지만, folder_criteria·search_document가 생기면 바디의 `kind`
+필드로 다시 분기해야 한다(주석에 명시). 입력은 content_analysis가 이미 뽑아둔
+`ocr_text`/`observed_evidence`와, 판단 대상 폴더들의 `id`/`criteria_text`/`criteria_version`
+목록 — 원본 이미지를 다시 보내지 않는다.
+
+**classification은 폴더 소속을 저장하는 API가 아니다(API 명세 §4).** 요청한 폴더별로
+`match`/`no_match`/`uncertain` 판정과 근거만 돌려준다. 실제로 `FolderCapture`에 반영하는 건
+클라이언트(로컬 DB) 책임이고, 이 서버 작업은 아직 이 판정을 부르는 로컬 큐·UI와 연결돼 있지
+않다 — 이번 작업은 "서버 뼈대"까지다.
+
+**API 명세 §4 "누락된 판정은 성공한 no_match로 간주하지 않는다"를 강한 불변식으로 구현했다.**
+`GeminiClassificationClient.classify()`가 Gemini 응답을 요청한 폴더 집합과 대조해:
+- 응답에 없는 folder_id(모델이 판정을 빠뜨림) → `uncertain`으로 채워 넣는다(`no_match`로
+  둔갑시키지 않음).
+- 요청에 없는 folder_id(모델이 지어냄) → 버린다.
+- `criteria_version`은 모델 응답을 신뢰하지 않고 항상 원래 요청 값을 그대로 쓴다 — 모델이 버전
+  번호를 잘못 옮겨 적을 이유를 아예 만들지 않기 위해서다(모델에게 애초에 요구하지 않음).
+
+이 불변식 덕에 호출자는 항상 "요청한 폴더 수 == 응답 판정 수"를 신뢰할 수 있다.
+
+**Job.contentRevision 컬럼을 그대로 재사용한다** — classification에서는 `analysis_revision`을
+담는다(스키마 변경 없음, content_analysis의 `content_revision`과 같은 컬럼이지만 의미만 다르게
+씀). **`JobStatusResponse.result`를 `ContentAnalysisResultDTO` 고정 타입에서 `Object`로
+일반화했다** — kind마다 result 모양이 달라서(`JobService.getStatus`가 `job.getKind()`로 분기해
+`ContentAnalysisResultDTO`/`ClassificationResultDTO` 중 하나로 역직렬화), 이걸 안 고치면 GET이
+항상 content_analysis 모양으로 (잘못) 파싱을 시도했을 것이다.
+
+**`JobStateTransitions.markSucceeded`/`markClassificationSucceeded`가 `finishSucceeded` 공통
+로직을 공유하도록 리팩터링했다** — 결과 JSON 직렬화·TTL 계산·실패 시 대체 처리가 kind와 무관하게
+같아서다.
+
+**아직 안 된 것**: 이 Job을 실제로 호출하는 로컬 큐(캡처 분석 완료 후 폴더 목록과 함께 자동 제출),
+`FolderCapture` 반영, RECLASS-01 재분류 실행. `folder_criteria` kind(폴더 생성 시 기준 구체화)도
+없어서, 지금은 폴더의 `criteriaText`를 사용자가 입력한 그대로 classification에 넘긴다 — 모호한
+기준을 다듬어주는 단계가 빠져 있다.
+
+**테스트 (12개 추가, 총 106개)**: `JobServiceTest`(4, classification 제출·멱등성·GET 파싱),
+`AsyncClassificationWorkerTest`(2), `JobStateTransitionsTest`(1),
+`GeminiClassificationClientTest`(5, `MockRestServiceServer` — 누락 폴더 uncertain 처리·지어낸
+folder_id 제거 케이스 포함). **실제 Gemini 응답으로 검증한 적은 아직 없다** — 이 세션 내내 무료
+한도(quota)와 일시적 과부하(503) 때문에 content_analysis 재검증도 못 끝난 상태라, classification
+프롬프트·스키마는 `GeminiSearchInterpretationClient`와 마찬가지로 **아직 한 번도 진짜 Gemini
+응답으로 확인 안 된 잠정 형태**다. 다음에 Gemini가 정상 동작할 때 실제 응답부터 확인할 것.
 
 ## 검색어 해석 (`POST /v1/search/prepare`, 2026-09-22)
 

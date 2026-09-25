@@ -32,11 +32,11 @@ public class AsyncContentAnalysisWorker implements ContentAnalysisWorker {
 
     @Override
     @Async("jobExecutor")
-    public void run(String jobId, byte[] imageBytes, String ocrTextHint) {
+    public void run(String jobId, byte[] imageBytes, String mimeType, String ocrTextHint) {
         transitions.markRunning(jobId);
         try {
             ContentAnalysisResult result = contentAnalysisClient.analyze(
-                new ContentAnalysisRequest(imageBytes, "image/png", ocrTextHint));
+                new ContentAnalysisRequest(imageBytes, mimeType, ocrTextHint));
             transitions.markSucceeded(jobId, result);
         } catch (Exception e) {
             // 이미지·OCR 내용은 로그에 남기지 않는다(컨벤션 #13) — jobId만 남긴다.

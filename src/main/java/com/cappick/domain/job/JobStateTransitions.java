@@ -3,6 +3,7 @@ package com.cappick.domain.job;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,7 +11,10 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import com.cappick.domain.job.dto.ClassificationDecisionDTO;
+import com.cappick.domain.job.dto.ClassificationResultDTO;
 import com.cappick.domain.job.dto.ContentAnalysisResultDTO;
+import com.cappick.external.classification.ClassificationResult;
 import com.cappick.external.contentanalysis.ContentAnalysisResult;
 
 /**
@@ -49,18 +53,32 @@ public class JobStateTransitions {
             ContentAnalysisResultDTO dto = new ContentAnalysisResultDTO(
                 job.getContentRevision(), result.ocrText(), result.observedEvidence(),
                 result.searchText(), result.embedding(), result.embeddingModelVersion());
-            try {
-                String json = objectMapper.writeValueAsString(dto);
-                Instant now = clock.instant();
-                job.succeed(json, now, now.plus(RESULT_TTL));
-            } catch (JacksonException e) {
-                job.fail("RESULT_SERIALIZATION_FAILED", clock.instant());
-            }
+            finishSucceeded(job, dto);
+        });
+    }
+
+    @Transactional
+    public void markClassificationSucceeded(String jobId, ClassificationResult result) {
+        jobs.findById(jobId).ifPresent(job -> {
+            List<ClassificationDecisionDTO> decisions = result.decisions().stream()
+                .map(d -> new ClassificationDecisionDTO(d.folderId(), d.criteriaVersion(), d.decision(), d.evidence()))
+                .toList();
+            finishSucceeded(job, new ClassificationResultDTO(decisions));
         });
     }
 
     @Transactional
     public void markFailed(String jobId, String errorCode) {
         jobs.findById(jobId).ifPresent(job -> job.fail(errorCode, clock.instant()));
+    }
+
+    private void finishSucceeded(Job job, Object resultDto) {
+        try {
+            String json = objectMapper.writeValueAsString(resultDto);
+            Instant now = clock.instant();
+            job.succeed(json, now, now.plus(RESULT_TTL));
+        } catch (JacksonException e) {
+            job.fail("RESULT_SERIALIZATION_FAILED", clock.instant());
+        }
     }
 }

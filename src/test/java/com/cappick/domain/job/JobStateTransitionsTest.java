@@ -19,6 +19,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.json.JsonMapper;
 
 import com.cappick.domain.installation.Installation;
+import com.cappick.external.classification.ClassificationDecisionResult;
+import com.cappick.external.classification.ClassificationResult;
 import com.cappick.external.contentanalysis.ContentAnalysisResult;
 
 @ExtendWith(MockitoExtension.class)
@@ -65,6 +67,26 @@ class JobStateTransitionsTest {
         assertNotNull(job.getResultJson());
         assertEquals(NOW.plusSeconds(3600 * 24), job.getResultExpiresAt());
         assertEquals(true, job.getResultJson().contains("\"analysisRevision\":5"));
+    }
+
+    @Test
+    void markClassificationSucceededStoresSerializedResultAndExpiry() {
+        Job classificationJob = Job.builder()
+            .id("job-2").installation(job.getInstallation()).clientReference("ref-2")
+            .idempotencyKey("key-2").requestDigest("d").kind(JobKind.CLASSIFICATION)
+            .contentRevision(1).createdAt(NOW)
+            .build();
+        when(jobs.findById("job-2")).thenReturn(Optional.of(classificationJob));
+        classificationJob.start();
+
+        transitions.markClassificationSucceeded("job-2", new ClassificationResult(List.of(
+            new ClassificationDecisionResult("folder-1", 1, ClassificationDecision.MATCH, "면접 예상 질문 문구가 확인됨"))));
+
+        assertEquals(JobStatus.SUCCEEDED, classificationJob.getStatus());
+        assertNotNull(classificationJob.getResultJson());
+        assertEquals(NOW.plusSeconds(3600 * 24), classificationJob.getResultExpiresAt());
+        assertEquals(true, classificationJob.getResultJson().contains("\"folderId\":\"folder-1\""));
+        assertEquals(true, classificationJob.getResultJson().contains("\"decision\":\"match\""));
     }
 
     @Test
