@@ -24,7 +24,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.json.JsonMapper;
 
 import com.cappick.common.exception.IdempotencyConflictException;
+import com.cappick.common.exception.InstallationDeletionInProgressException;
 import com.cappick.common.exception.JobNotFoundException;
+import com.cappick.domain.deletion.DeletionRequestRepository;
 import com.cappick.domain.installation.Installation;
 import com.cappick.domain.job.dto.ClassificationAnalysisDTO;
 import com.cappick.domain.job.dto.ClassificationDecisionDTO;
@@ -33,6 +35,8 @@ import com.cappick.domain.job.dto.ClassificationRequestDTO;
 import com.cappick.domain.job.dto.ClassificationResultDTO;
 import com.cappick.domain.job.dto.ContentAnalysisMetadataDTO;
 import com.cappick.domain.job.dto.ContentAnalysisResultDTO;
+import com.cappick.domain.usage.UsageCategory;
+import com.cappick.domain.usage.UsageService;
 
 @ExtendWith(MockitoExtension.class)
 class JobServiceTest {
@@ -45,6 +49,10 @@ class JobServiceTest {
     private ContentAnalysisWorker worker;
     @Mock
     private ClassificationWorker classificationWorker;
+    @Mock
+    private UsageService usageService;
+    @Mock
+    private DeletionRequestRepository deletionRequests;
 
     private JobService service;
     private Installation installation;
@@ -52,7 +60,8 @@ class JobServiceTest {
     @BeforeEach
     void setUp() {
         service = new JobService(
-            jobs, worker, classificationWorker, JsonMapper.builder().build(), Clock.fixed(NOW, ZoneOffset.UTC));
+            jobs, worker, classificationWorker, usageService, deletionRequests,
+            JsonMapper.builder().build(), Clock.fixed(NOW, ZoneOffset.UTC));
         installation = Installation.builder()
             .id("i1").credentialHash("h").keyId("k").publicKeyBase64("pk").createdAt(NOW)
             .build();
@@ -80,6 +89,17 @@ class JobServiceTest {
         assertEquals(JobStatus.QUEUED, submitted.status());
         verify(jobs).save(any(Job.class));
         verify(worker).run(eq(submitted.jobId()), eq(image), eq("image/jpeg"), eq((String) null));
+        verify(usageService).reserve(installation, "key-1", UsageCategory.CONTENT_ANALYSIS, 1);
+    }
+
+    @Test
+    void submitContentAnalysisBlockedWhileInstallationDeletionInProgress() {
+        when(deletionRequests.existsActiveByInstallation(installation)).thenReturn(true);
+
+        assertThrows(InstallationDeletionInProgressException.class, () -> service.submitContentAnalysis(
+            installation, "key-1", metadata("ref-1", 1, null), new byte[]{1}, "image/jpeg"));
+        verify(jobs, never()).save(any());
+        verify(worker, never()).run(anyString(), any(), any(), any());
     }
 
     @Test
@@ -154,6 +174,17 @@ class JobServiceTest {
         verify(classificationWorker).run(
             eq(submitted.jobId()), eq("자바 면접 예상 질문"), eq(List.of("면접 예상 질문이라는 문구가 있음")),
             eq(List.of(new ClassificationFolderInput("folder-1", "면접 질문과 면접 안내", 1))));
+        verify(usageService).reserve(installation, "key-1", UsageCategory.CLASSIFICATION, 1);
+    }
+
+    @Test
+    void submitClassificationBlockedWhileInstallationDeletionInProgress() {
+        when(deletionRequests.existsActiveByInstallation(installation)).thenReturn(true);
+
+        assertThrows(InstallationDeletionInProgressException.class, () -> service.submitClassification(
+            installation, "key-1", classificationRequest("ref-1", 1)));
+        verify(jobs, never()).save(any());
+        verify(classificationWorker, never()).run(anyString(), any(), any(), any());
     }
 
     @Test

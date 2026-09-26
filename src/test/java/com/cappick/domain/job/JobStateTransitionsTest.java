@@ -2,6 +2,7 @@ package com.cappick.domain.job;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -19,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.json.JsonMapper;
 
 import com.cappick.domain.installation.Installation;
+import com.cappick.domain.usage.UsageService;
 import com.cappick.external.classification.ClassificationDecisionResult;
 import com.cappick.external.classification.ClassificationResult;
 import com.cappick.external.contentanalysis.ContentAnalysisResult;
@@ -30,13 +32,16 @@ class JobStateTransitionsTest {
 
     @Mock
     private JobRepository jobs;
+    @Mock
+    private UsageService usageService;
 
     private JobStateTransitions transitions;
     private Job job;
 
     @BeforeEach
     void setUp() {
-        transitions = new JobStateTransitions(jobs, JsonMapper.builder().build(), Clock.fixed(NOW, ZoneOffset.UTC));
+        transitions = new JobStateTransitions(
+            jobs, usageService, JsonMapper.builder().build(), Clock.fixed(NOW, ZoneOffset.UTC));
         Installation installation = Installation.builder()
             .id("i1").credentialHash("h").keyId("k").publicKeyBase64("pk").createdAt(NOW)
             .build();
@@ -67,6 +72,7 @@ class JobStateTransitionsTest {
         assertNotNull(job.getResultJson());
         assertEquals(NOW.plusSeconds(3600 * 24), job.getResultExpiresAt());
         assertEquals(true, job.getResultJson().contains("\"analysisRevision\":5"));
+        verify(usageService).confirm(job.getInstallation(), "key-1");
     }
 
     @Test
@@ -87,6 +93,7 @@ class JobStateTransitionsTest {
         assertEquals(NOW.plusSeconds(3600 * 24), classificationJob.getResultExpiresAt());
         assertEquals(true, classificationJob.getResultJson().contains("\"folderId\":\"folder-1\""));
         assertEquals(true, classificationJob.getResultJson().contains("\"decision\":\"match\""));
+        verify(usageService).confirm(classificationJob.getInstallation(), "key-2");
     }
 
     @Test
@@ -99,6 +106,7 @@ class JobStateTransitionsTest {
         assertEquals(JobStatus.FAILED, job.getStatus());
         assertEquals("ANALYSIS_FAILED", job.getErrorCode());
         assertEquals(1, job.getAttempts());
+        verify(usageService).release(job.getInstallation(), "key-1");
     }
 
     @Test

@@ -18,7 +18,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import com.cappick.common.exception.IdempotencyConflictException;
+import com.cappick.common.exception.InstallationDeletionInProgressException;
 import com.cappick.common.exception.JobNotFoundException;
+import com.cappick.domain.deletion.DeletionRequestRepository;
 import com.cappick.domain.installation.Installation;
 import com.cappick.domain.job.dto.ClassificationFolderRequestDTO;
 import com.cappick.domain.job.dto.ClassificationRequestDTO;
@@ -27,6 +29,8 @@ import com.cappick.domain.job.dto.ContentAnalysisMetadataDTO;
 import com.cappick.domain.job.dto.ContentAnalysisResultDTO;
 import com.cappick.domain.job.dto.JobErrorDTO;
 import com.cappick.domain.job.dto.JobStatusResponse;
+import com.cappick.domain.usage.UsageCategory;
+import com.cappick.domain.usage.UsageService;
 
 @Service
 public class JobService {
@@ -37,16 +41,20 @@ public class JobService {
     private final JobRepository jobs;
     private final ContentAnalysisWorker contentAnalysisWorker;
     private final ClassificationWorker classificationWorker;
+    private final UsageService usageService;
+    private final DeletionRequestRepository deletionRequests;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
     public JobService(
         JobRepository jobs, ContentAnalysisWorker contentAnalysisWorker, ClassificationWorker classificationWorker,
-        ObjectMapper objectMapper, Clock clock
+        UsageService usageService, DeletionRequestRepository deletionRequests, ObjectMapper objectMapper, Clock clock
     ) {
         this.jobs = jobs;
         this.contentAnalysisWorker = contentAnalysisWorker;
         this.classificationWorker = classificationWorker;
+        this.usageService = usageService;
+        this.deletionRequests = deletionRequests;
         this.objectMapper = objectMapper;
         this.clock = clock;
     }
@@ -60,6 +68,7 @@ public class JobService {
         Installation installation, String idempotencyKey, ContentAnalysisMetadataDTO metadata, byte[] imageBytes,
         String mimeType
     ) {
+        requireNoActiveDeletion(installation);
         String digest = requestDigest(imageBytes, metadata.contentRevision(), metadata.ocrText());
 
         Optional<Job> existing = jobs.findByInstallationAndIdempotencyKey(installation, idempotencyKey);
@@ -82,6 +91,9 @@ public class JobService {
             .createdAt(clock.instant())
             .build();
         jobs.save(job);
+        // Job 생성과 같은 트랜잭션 안에서 원자적으로 예약한다(ERD §5, 컨벤션 #6). "Job 1건 =
+        // 1 unit"은 잠정 단위다 — 실제 과금 단위는 미정(§14).
+        usageService.reserve(installation, idempotencyKey, UsageCategory.from(job.getKind()), 1);
         // 이 트랜잭션이 커밋된 뒤에야 워커를 띄운다 — dispatchAfterCommit 주석 참고.
         dispatchAfterCommit(() -> contentAnalysisWorker.run(job.getId(), imageBytes, mimeType, metadata.ocrText()));
 
@@ -95,6 +107,7 @@ public class JobService {
      */
     @Transactional
     public JobSubmitted submitClassification(Installation installation, String idempotencyKey, ClassificationRequestDTO request) {
+        requireNoActiveDeletion(installation);
         String digest = requestDigest(request);
 
         Optional<Job> existing = jobs.findByInstallationAndIdempotencyKey(installation, idempotencyKey);
@@ -117,6 +130,7 @@ public class JobService {
             .createdAt(clock.instant())
             .build();
         jobs.save(job);
+        usageService.reserve(installation, idempotencyKey, UsageCategory.from(job.getKind()), 1);
 
         List<ClassificationFolderInput> folders = request.folders().stream()
             .map(f -> new ClassificationFolderInput(f.id(), f.criteriaText(), f.criteriaVersion()))
@@ -125,6 +139,14 @@ public class JobService {
             job.getId(), request.analysis().ocrText(), request.analysis().observedEvidence(), folders));
 
         return new JobSubmitted(job.getId(), job.getStatus(), POLL_AFTER_SECONDS);
+    }
+
+    // 설치 콘텐츠 전체 삭제가 진행 중이면(PENDING·PROCESSING) 새 Job 제출을 막는다(API 명세 §7
+    // "처리 중 앱도 신규 제출을 멈춘다").
+    private void requireNoActiveDeletion(Installation installation) {
+        if (deletionRequests.existsActiveByInstallation(installation)) {
+            throw new InstallationDeletionInProgressException(installation.getId());
+        }
     }
 
     // @Async는 호출하는 즉시 다른 스레드를 띄우는데, 이 메서드를 감싼 @Transactional은 메서드가

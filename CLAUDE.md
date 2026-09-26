@@ -4,7 +4,7 @@ CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CL
 
 ## 현재 상태
 
-**설치 검증(Installation, App Attest)**, **Job(content_analysis·classification, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)** 이 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis·classification) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "자동 분류", "검색어 해석" 절 참고. UsageEntry·DeletionRequest, 나머지 Job kind(folder_criteria/search_document)는 아직 없다.
+**설치 검증(Installation, App Attest)**, **Job(content_analysis·classification, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)**, **사용량·삭제(UsageEntry, DeletionRequest)** 가 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis·classification) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`, §7의 `GET /v1/usage` · `POST /v1/data-deletions` · `GET /v1/data-deletions/{id}`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "자동 분류", "검색어 해석", "사용량·삭제" 절 참고. 나머지 Job kind(folder_criteria/search_document) 중 `folder_criteria`는 만들지 않기로 결정했고(아래 "사용량·삭제" 절 참고 — 실은 `CapPick-ios/CLAUDE.md`에 근거를 남김), `search_document`는 여전히 없다.
 
 ## 스택
 
@@ -197,6 +197,78 @@ Authorization 헤더 없음 → 400. **실제 Gemini 응답으로 `date_interpre
 Gemini로 검증된 게 아니라 `GeminiContentAnalysisClient`의 실제 검증된 형태를 참고해 **추정**한
 것이므로, 실제 응답을 받으면 이 테스트의 스텁 JSON도 맞춰 갱신해야 할 수 있다).
 
+## 사용량·삭제 (UsageEntry·DeletionRequest, 2026-09-26)
+
+API 명세 §7, ERD §4. `domain/usage/`·`domain/deletion/`은 그동안 디렉토리만 있고 파일이
+0개였다 — 이번에 채웠다. `GET /v1/usage`, `POST /v1/data-deletions`, `GET /v1/data-deletions/{id}`
+가 실제로 동작한다.
+
+**사용량 추적은 실제로 하되, 한도는 막지 않는다(사용자 결정, 2026-09-26).** `used_units`·
+`reserved_units`는 `UsageEntry`(예약/확정/해제 원자적 전이, ERD §4 그대로)로 실계산해서 돌려주지만,
+`limit_units`·`resets_at`은 항상 null, `can_submit`은 항상 true다 — ERD §6·API 명세 §8이
+"사용량 단위와 한도"를 명시적으로 미정이라고 못박아서, 임의 숫자로 확정하지 않았다(§14 컨벤션).
+`UsageEntry.operationKey`는 Job의 `idempotencyKey`를 그대로 재사용한다 — Job 하나당 사용량
+항목이 정확히 하나만 생기고, Job이 멱등 재제출되면 `UsageService.reserve()`가 중복 생성 없이
+기존 항목을 그대로 돌려준다. **"Job 1건 = 1 unit"은 잠정 단위다** — 실제 과금 단위는 여전히
+미정. Job 성공 시 `confirm()`(과금 확정), 실패 시 `release()`(과금 안 함)로 전이한다 — "실패
+비용" 정책 자체는 미정이라 "실패하면 과금 안 함"을 잠정 기본값으로 뒀다(API 명세 §5).
+
+**`folder_criteria` Job kind는 만들지 않기로 결정했다(2026-09-26, 사용자 결정).** 폴더 생성 시
+모호한 기준을 AI가 "구체화"하는 기능을 검토했지만, 그 구체화 자체가 또 하나의 해석 단계라
+사용자 의도를 오히려 좁힐 위험이 있다고 판단했다 — 상세 근거와 대안(느슨한 기준 + 쉬운 수동
+교정)은 `CapPick-ios/CLAUDE.md`에 남겼다. 이 결정 덕분에 이번 작업(usage/deletion)에만 집중할
+수 있었다.
+
+**설치 콘텐츠 전체 삭제 = Job 행 삭제.** 지금 `Job`은 이미지 바이트를 저장하지 않고
+`result_json`만 갖고 있어서(위 "Job 도메인" 절 참고), 행 자체를 지우는 게 곧 콘텐츠 삭제다.
+`JobRepository.deleteByInstallation()`으로 지운다. **덕분에 "늦게 도착한 결과 저장 차단"은
+별도 코드 없이 공짜로 해결됐다** — `JobStateTransitions`의 모든 전이 메서드가 이미
+`jobs.findById(jobId).ifPresent(...)` 관용구를 쓰고 있어서(위 "실제로 겪은 버그 2" 절의
+self-invocation 버그를 고치며 이미 있던 패턴), 삭제된 뒤 도착한 워커 결과는 `findById`가 빈
+값을 반환해 조용히 no-op된다. `UsageEntry`는 삭제해도 안 건드린다 — "사용량 보호 기록은
+콘텐츠 삭제와 별도 정책"이라는 ERD §4 설명을 그대로 따른 것으로, curl로 직접 삭제 전후
+`usage_entry` 테이블 내용이 그대로인 것까지 확인했다.
+
+**설치 전체 삭제 진행 중엔 새 Job 제출을 막는다(API 명세 §7 "처리 중 앱도 신규 제출을
+멈춘다").** `JobService.submitContentAnalysis`/`submitClassification` 맨 앞에서
+`DeletionRequestRepository.existsActiveByInstallation()`(PENDING·PROCESSING을 active로
+간주)을 확인해 활성 삭제가 있으면 409 `DELETION_IN_PROGRESS`로 거부한다.
+
+**⚠️ 실제로 겪은 버그 — Spring 빈 순환 참조(self-invocation과는 다른 원인).** 처음엔
+`AsyncDeletionWorker`가 상태 전이(`markProcessing`/`deleteContent`/`markFailed`)를
+`DeletionService`의 메서드로 직접 호출하게 만들었다. `./gradlew test`의
+`CapPickServerApplicationTests.contextLoads()`가 `BeanCurrentlyInCreationException`으로
+바로 실패했다 — `DeletionService`가 비동기 디스패치를 위해 `DeletionWorker`(인터페이스)를
+의존하는데, 그 구현체 `AsyncDeletionWorker`가 다시 `DeletionService`를 의존하니 Spring이 두
+빈을 서로 먼저 만들 수가 없었다. `ContentAnalysisWorker` 계열이 상태 전이를 `JobStateTransitions`
+라는 별도 빈으로 뺀 것과 똑같은 이유(원인은 self-invocation으로 다르지만)로,
+`DeletionStateTransitions`를 새로 만들어 `AsyncDeletionWorker`가 그걸 의존하게 바꿔서 순환을
+끊었다. **Mockito 단위 테스트로는 이 버그를 못 잡는다** — 순수 Java 객체 조립이라 순환이 있어도
+그냥 되기 때문에, `contextLoads()`처럼 실제 Spring 컨테이너를 띄우는 테스트가 있어야만 드러난다
+(Job 쪽 self-invocation 버그를 "실제 서버로 끝까지 돌려본 게 아니었으면 몰랐을 버그"라고 남긴
+것과 같은 교훈 — 이번엔 통합 테스트 한 줄이 그 역할을 대신 해줬다).
+
+**실제 검증 (curl + 로컬 PostgreSQL, GEMINI_API_KEY 없이):**
+1. 설치 등록 → content_analysis Job 제출 → GEMINI_API_KEY가 없어 즉시 FAILED로 끝남 →
+   `usage_entry` 테이블에서 해당 Job의 `operation_key`가 `RELEASED` 상태인 것 확인(예약 →
+   실패 → 해제가 실제로 원자적으로 돌아감).
+2. `POST /v1/data-deletions` → `GET /v1/data-deletions/{id}`로 `completed` 확인 → 삭제 전
+   Job을 `GET /v1/jobs/{id}`로 조회하면 404 `JOB_NOT_FOUND`(행이 실제로 삭제됨) → 같은
+   Idempotency-Key로 재요청하면 새로 안 만들고 기존 `completed` 그대로 반환 → `usage_entry`는
+   삭제 후에도 그대로 남아있음(위 설명대로).
+3. **"진행 중 새 Job 제출 차단"은 라이브 curl로는 못 재현했다** — 삭제 자체가 DB 삭제뿐이라
+   PENDING/PROCESSING으로 머무는 시간이 너무 짧아서(밀리초 단위), 순차 curl 호출 사이에 이미
+   COMPLETED로 끝나 있었다. 이 부분은 `JobServiceTest`가 `existsActiveByInstallation`을
+   mocking해서 결정론적으로 검증한다(라이브 검증이 필요하면 `DeletionStateTransitions.
+   deleteContent`에 인위적 지연을 넣고 다시 볼 것).
+
+**테스트 (23개 추가, 총 126개):** `UsageServiceTest`(6, 예약 멱등성·confirm/release 전이·
+카테고리별 집계), `DeletionServiceTest`(4, 멱등 재제출·진행 중 삭제 차단·소유권 스코프),
+`DeletionStateTransitionsTest`(5, PENDING→PROCESSING→COMPLETED/FAILED 전이·Job 삭제 호출
+확인), `AsyncDeletionWorkerTest`(2, 성공/실패 경로에서 전이 메서드 호출 순서 확인),
+`JobServiceTest`(2 추가, Job 제출 시 실제 예약되는지·진행 중 삭제 시 차단되는지),
+`JobStateTransitionsTest`(기존 3개 테스트에 confirm/release 호출 검증 추가).
+
 ## 코딩 컨벤션
 
 `last-safe-server`에서 검증된 패턴 중 CapPick에 맞는 부분(엔터티 불변성, 소유권 스코프 쿼리, 외부 연동 인터페이스 격리)을 가져오고, CapPick의 시스템 설계·ERD·API 계약에 필요한 부분(멱등성, 상태 전이, Job 비동기 처리, 임시 데이터 삭제, 로그 민감정보 제외)을 CapPick 전용으로 확장한 것이다. last-safe-server 구조를 그대로 복제하지 않는다.
@@ -351,6 +423,7 @@ Service는 `ContentAnalysisClient` 같은 인터페이스만 알고 구체적인
 - **AI 결과 result_json 보존 기간·워커 재시도 정책**: `JobStateTransitions.RESULT_TTL`(24시간)은 잠정치다. 작업 실패 시 재시도 정책(자동 재시도 여부, 횟수)도 아직 없다 — 지금은 실패하면 그냥 FAILED로 끝난다.
 - **content_analysis 외 kind가 생겼을 때의 컨트롤러 구조**: `POST /v1/jobs`가 지금은 multipart 전용이다. API 명세는 "다른 kind는 application/json"이라고 하는데, 같은 경로에서 Content-Type으로 분기할지 별도 하위 경로로 나눌지 안 정했다.
 - **워커/큐 도입 시점**: `AsyncConfig`는 인프로세스 스레드풀일 뿐이다 — 서버가 죽으면 진행 중이던 job은 유실된다. 언제 진짜 큐(+ lease·재수집)로 옮길지는 트래픽을 보고 정한다(시스템 설계 §2).
+- **동시에 두 삭제 요청이 겹칠 때 처리**: 지금 `DeletionService.requestInstallationDeletion`은 이미 활성(PENDING·PROCESSING) 삭제가 있으면 다른 Idempotency-Key의 새 삭제 요청도 무조건 409로 거부한다 — 잠정 정책이다.
 
 ## 지켜야 할 제약 (루트 CLAUDE.md 요약)
 

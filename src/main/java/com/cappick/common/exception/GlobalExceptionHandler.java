@@ -75,6 +75,16 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "SEARCH_UNAVAILABLE", "검색 서비스가 일시적으로 불안정합니다.", true);
     }
 
+    @ExceptionHandler(DeletionRequestNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleDeletionRequestNotFound(DeletionRequestNotFoundException e) {
+        return error(HttpStatus.NOT_FOUND, "DELETION_NOT_FOUND", "삭제 요청을 찾을 수 없습니다.", false);
+    }
+
+    @ExceptionHandler(InstallationDeletionInProgressException.class)
+    public ResponseEntity<ApiErrorResponse> handleDeletionInProgress(InstallationDeletionInProgressException e) {
+        return error(HttpStatus.CONFLICT, "DELETION_IN_PROGRESS", "설치 데이터 삭제가 진행 중입니다.", true);
+    }
+
     private ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message, boolean retryable) {
         String requestId = "req_" + UUID.randomUUID();
         return ResponseEntity.status(status).body(new ApiErrorResponse(new ApiErrorBody(code, message, retryable), requestId));

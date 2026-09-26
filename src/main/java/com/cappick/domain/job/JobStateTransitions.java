@@ -14,6 +14,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.cappick.domain.job.dto.ClassificationDecisionDTO;
 import com.cappick.domain.job.dto.ClassificationResultDTO;
 import com.cappick.domain.job.dto.ContentAnalysisResultDTO;
+import com.cappick.domain.usage.UsageService;
 import com.cappick.external.classification.ClassificationResult;
 import com.cappick.external.contentanalysis.ContentAnalysisResult;
 
@@ -33,11 +34,13 @@ public class JobStateTransitions {
     private static final Duration RESULT_TTL = Duration.ofHours(24);
 
     private final JobRepository jobs;
+    private final UsageService usageService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
-    public JobStateTransitions(JobRepository jobs, ObjectMapper objectMapper, Clock clock) {
+    public JobStateTransitions(JobRepository jobs, UsageService usageService, ObjectMapper objectMapper, Clock clock) {
         this.jobs = jobs;
+        this.usageService = usageService;
         this.objectMapper = objectMapper;
         this.clock = clock;
     }
@@ -69,16 +72,23 @@ public class JobStateTransitions {
 
     @Transactional
     public void markFailed(String jobId, String errorCode) {
-        jobs.findById(jobId).ifPresent(job -> job.fail(errorCode, clock.instant()));
+        jobs.findById(jobId).ifPresent(job -> {
+            job.fail(errorCode, clock.instant());
+            usageService.release(job.getInstallation(), job.getIdempotencyKey());
+        });
     }
 
+    // 성공 시 사용량을 확정(confirm)하고, 결과 직렬화가 실패해 실제로는 FAILED로 끝나면 확정
+    // 대신 해제(release)한다 — "성공 경로로 들어왔다"가 아니라 Job의 최종 상태를 보고 판단한다.
     private void finishSucceeded(Job job, Object resultDto) {
         try {
             String json = objectMapper.writeValueAsString(resultDto);
             Instant now = clock.instant();
             job.succeed(json, now, now.plus(RESULT_TTL));
+            usageService.confirm(job.getInstallation(), job.getIdempotencyKey());
         } catch (JacksonException e) {
             job.fail("RESULT_SERIALIZATION_FAILED", clock.instant());
+            usageService.release(job.getInstallation(), job.getIdempotencyKey());
         }
     }
 }
