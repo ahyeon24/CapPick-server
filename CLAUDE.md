@@ -142,10 +142,13 @@ search_document는 아직 없음). 기능명세서 §3.3.1 "직접 근거 기반
 로직을 공유하도록 리팩터링했다** — 결과 JSON 직렬화·TTL 계산·실패 시 대체 처리가 kind와 무관하게
 같아서다.
 
-**아직 안 된 것**: 이 Job을 실제로 호출하는 로컬 큐(캡처 분석 완료 후 폴더 목록과 함께 자동 제출),
-`FolderCapture` 반영, RECLASS-01 재분류 실행. `folder_criteria` kind(폴더 생성 시 기준 구체화)도
-없어서, 지금은 폴더의 `criteriaText`를 사용자가 입력한 그대로 classification에 넘긴다 — 모호한
-기준을 다듬어주는 단계가 빠져 있다.
+**`folder_criteria` kind(폴더 생성 시 모호한 기준을 AI가 다듬어주는 것)는 만들지 않기로
+결정함(2026-09-26, 사용자 결정, 근거는 `CapPick-ios/CLAUDE.md`에 남김)** — AI가 기준을
+"구체화"하는 과정 자체가 사용자 의도를 오히려 좁힐 위험이 있다고 판단해서, 지금처럼 폴더의
+`criteriaText`를 사용자가 입력한 그대로(또는 비었으면 폴더 제목으로) classification에 넘기는
+느슨한 방식을 유지한다. 이 결정 이후 `FolderCapture` 반영·자동 제출 큐·RECLASS-01 재분류는
+iOS 쪽에서 이미 구현됐다(`CapPick-ios/CLAUDE.md` "AI-03"·"RECLASS-01" 절 참고) — 이 문단이
+한동안 갱신 안 돼서 "아직 안 됨"으로 남아있었다.
 
 **테스트 (12개 추가, 총 106개)**: `JobServiceTest`(4, classification 제출·멱등성·GET 파싱),
 `AsyncClassificationWorkerTest`(2), `JobStateTransitionsTest`(1),
