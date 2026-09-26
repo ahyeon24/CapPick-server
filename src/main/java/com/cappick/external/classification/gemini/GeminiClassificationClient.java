@@ -118,7 +118,10 @@ public class GeminiClassificationClient implements ClassificationClient {
         generationConfig.put("responseMimeType", "application/json");
         generationConfig.set("responseSchema", decisionSchema());
 
-        JsonNode response = call(GENERATE_CONTENT_PATH, properties.model(), body);
+        // content_analysis(properties.model())와 다른 모델을 쓴다 — 2026-09-26 결정,
+        // GeminiProperties.classificationModel() 문서 참고(무료 티어 RPD가 모델별로 분리돼 있어서
+        // 분류를 더 가벼운 모델로 옮기면 하루 처리량이 실질적으로 늘어난다).
+        JsonNode response = call(GENERATE_CONTENT_PATH, properties.classificationModel(), body);
         String text = response.path("candidates").path(0).path("content").path("parts").path(0)
             .path("text").asString(null);
         if (text == null) {

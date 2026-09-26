@@ -42,7 +42,7 @@ class GeminiSearchInterpretationClientTest {
 
     @Test
     void interpretParsesNormalizedQueryLexicalTermsAndDateRange() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
@@ -63,7 +63,7 @@ class GeminiSearchInterpretationClientTest {
 
     @Test
     void interpretTreatsMissingDateFieldsAsNoDateCondition() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
@@ -80,7 +80,7 @@ class GeminiSearchInterpretationClientTest {
 
     @Test
     void embedCallsEmbedContentAndParsesValues() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"))
@@ -97,7 +97,7 @@ class GeminiSearchInterpretationClientTest {
 
     @Test
     void missingApiKeyFailsFastWithoutCallingNetwork() {
-        setUp(new GeminiProperties("", "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties("", "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
 
         assertThrows(SearchInterpretationException.class, () -> client.interpret("질문", NOW, SEOUL));
         assertThrows(SearchInterpretationException.class, () -> client.embed("질문"));
@@ -105,7 +105,7 @@ class GeminiSearchInterpretationClientTest {
 
     @Test
     void serverErrorIsWrappedAsSearchInterpretationException() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
@@ -116,7 +116,7 @@ class GeminiSearchInterpretationClientTest {
 
     @Test
     void malformedJsonInTextPartIsWrappedAsSearchInterpretationException() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))

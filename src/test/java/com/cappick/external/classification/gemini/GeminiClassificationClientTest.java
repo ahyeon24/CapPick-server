@@ -43,10 +43,10 @@ class GeminiClassificationClientTest {
 
     @Test
     void classifyReturnsOneDecisionPerRequestedFolderUsingRequestedCriteriaVersion() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
 
         server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
             .andExpect(header("x-goog-api-key", CONFIGURED_KEY))
             .andRespond(withSuccess("""
                 {"candidates":[{"content":{"parts":[{"text":"{\\"decisions\\":[{\\"folder_id\\":\\"folder-1\\",\\"decision\\":\\"match\\",\\"evidence\\":\\"면접 예상 질문 문구가 확인됨\\"}]}"}]}}]}
@@ -65,10 +65,10 @@ class GeminiClassificationClientTest {
 
     @Test
     void folderMissingFromResponseBecomesUncertainNotSilentNoMatch() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
 
         server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
             .andRespond(withSuccess("""
                 {"candidates":[{"content":{"parts":[{"text":"{\\"decisions\\":[]}"}]}}]}
                 """, MediaType.APPLICATION_JSON));
@@ -83,10 +83,10 @@ class GeminiClassificationClientTest {
 
     @Test
     void folderIdHallucinatedByModelButNotRequestedIsDropped() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
 
         server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
             .andRespond(withSuccess("""
                 {"candidates":[{"content":{"parts":[{"text":"{\\"decisions\\":[{\\"folder_id\\":\\"folder-1\\",\\"decision\\":\\"match\\",\\"evidence\\":\\"e\\"},{\\"folder_id\\":\\"not-requested\\",\\"decision\\":\\"match\\",\\"evidence\\":\\"e\\"}]}"}]}}]}
                 """, MediaType.APPLICATION_JSON));
@@ -101,7 +101,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void missingApiKeyFailsFastWithoutCallingNetwork() {
-        setUp(new GeminiProperties("", "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties("", "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
 
         assertThrows(ClassificationException.class, () -> client.classify(new ClassificationRequest(
             "ocr", List.of(), List.of(new ClassificationFolderCriteria("folder-1", "기준", 1)))));
@@ -109,10 +109,10 @@ class GeminiClassificationClientTest {
 
     @Test
     void serverErrorIsWrappedAsClassificationException() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
 
         server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
             .andRespond(withServerError());
 
         assertThrows(ClassificationException.class, () -> client.classify(new ClassificationRequest(

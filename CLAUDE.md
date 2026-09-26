@@ -150,6 +150,19 @@ search_document는 아직 없음). 기능명세서 §3.3.1 "직접 근거 기반
 iOS 쪽에서 이미 구현됐다(`CapPick-ios/CLAUDE.md` "AI-03"·"RECLASS-01" 절 참고) — 이 문단이
 한동안 갱신 안 돼서 "아직 안 됨"으로 남아있었다.
 
+**classification 전용 모델로 분리함 (2026-09-26).** 처음엔 content_analysis와 같은
+`cappick.ai.gemini.model`(`gemini-3.5-flash`)을 그대로 썼는데, AI Studio 대시보드로 실측한 결과
+`gemini-3.5-flash`·`gemini-3.8-flash`가 무료 티어 RPD(하루 요청 한도)가 똑같이 20인 반면
+`gemini-3.5-flash-lite`는 RPD 500이었다 — classification은 이미 뽑아둔 텍스트를 폴더 기준과
+비교하는 반복적인 구조화 판단이라(이미지를 다시 이해할 필요 없음) 더 가벼운 모델로도 충분하다고
+판단해 `cappick.ai.gemini.classification-model=gemini-3.5-flash-lite`로 분리했다
+(`GeminiProperties.classificationModel()`, `GeminiClassificationClient`만 사용). **모델별로 RPD가
+독립적이라 이 분리만으로 하루 처리 가능한 캡처 수가 실질적으로 늘어난다** — 예전엔 캡처 한 장이
+content_analysis+classification 두 요청을 같은 20 RPD에서 나눠 써서 하루 최대 10장이었는데, 이제
+content_analysis 20 RPD를 거의 그대로 다 쓸 수 있다(classification은 별도 500 RPD라 병목이 아님).
+`gemini-3.8-flash`로 올리지 않은 이유는 RPD가 3.5와 동일한데 출시 직후 503 과부하를 이미 겪은
+전례가 있어서다(위 "실제 검증" 절 4번 참고) — 리스크만 지고 얻는 게 없다.
+
 **테스트 (12개 추가, 총 106개)**: `JobServiceTest`(4, classification 제출·멱등성·GET 파싱),
 `AsyncClassificationWorkerTest`(2), `JobStateTransitionsTest`(1),
 `GeminiClassificationClientTest`(5, `MockRestServiceServer` — 누락 폴더 uncertain 처리·지어낸

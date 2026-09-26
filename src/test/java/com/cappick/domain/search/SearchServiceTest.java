@@ -39,7 +39,7 @@ class SearchServiceTest {
 
     @BeforeEach
     void setUp() {
-        GeminiProperties properties = new GeminiProperties("key", "gemini-flash-latest", "gemini-embedding-001");
+        GeminiProperties properties = new GeminiProperties("key", "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model");
         service = new SearchService(interpretationClient, properties);
         installation = Installation.builder()
             .id("i1").credentialHash("h").keyId("k").publicKeyBase64("pk").createdAt(NOW)
