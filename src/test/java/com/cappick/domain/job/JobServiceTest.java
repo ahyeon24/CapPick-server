@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -23,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import tools.jackson.databind.json.JsonMapper;
 
+import com.cappick.common.exception.DailyBudgetExhaustedException;
 import com.cappick.common.exception.IdempotencyConflictException;
 import com.cappick.common.exception.InstallationDeletionInProgressException;
 import com.cappick.common.exception.JobNotFoundException;
@@ -90,6 +92,18 @@ class JobServiceTest {
         verify(jobs).save(any(Job.class));
         verify(worker).run(eq(submitted.jobId()), eq(image), eq("image/jpeg"), eq((String) null));
         verify(usageService).reserve(installation, "key-1", UsageCategory.CONTENT_ANALYSIS, 1);
+        verify(usageService).requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS);
+    }
+
+    @Test
+    void submitContentAnalysisBlockedWhenDailyBudgetExhausted() {
+        when(jobs.findByInstallationAndIdempotencyKey(installation, "key-1")).thenReturn(Optional.empty());
+        doThrow(new DailyBudgetExhaustedException("content_analysis"))
+            .when(usageService).requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS);
+
+        assertThrows(DailyBudgetExhaustedException.class, () -> service.submitContentAnalysis(
+            installation, "key-1", metadata("ref-1", 1, null), new byte[] {1}, "image/jpeg"));
+        verify(jobs, never()).save(any());
     }
 
     @Test
@@ -175,6 +189,7 @@ class JobServiceTest {
             eq(submitted.jobId()), eq("자바 면접 예상 질문"), eq(List.of("면접 예상 질문이라는 문구가 있음")),
             eq(List.of(new ClassificationFolderInput("folder-1", "면접 질문과 면접 안내", 1))));
         verify(usageService).reserve(installation, "key-1", UsageCategory.CLASSIFICATION, 1);
+        verify(usageService).requireDailyBudgetAvailable(UsageCategory.CLASSIFICATION);
     }
 
     @Test

@@ -2,7 +2,9 @@ package com.cappick.domain.usage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.cappick.common.exception.DailyBudgetExhaustedException;
 import com.cappick.domain.installation.Installation;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,7 +37,7 @@ class UsageServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new UsageService(usageEntries, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new UsageService(usageEntries, new UsageBudgetProperties(null, null), Clock.fixed(NOW, ZoneOffset.UTC));
         installation = Installation.builder()
             .id("i1").credentialHash("h").keyId("k").publicKeyBase64("pk").createdAt(NOW)
             .build();
@@ -115,5 +118,31 @@ class UsageServiceTest {
             .findFirst().orElseThrow();
         assertEquals(1, contentAnalysis.usedUnits());
         assertEquals(1, contentAnalysis.reservedUnits());
+    }
+
+    @Test
+    void requireDailyBudgetAvailablePassesWhenNoLimitConfigured() {
+        service.requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS); // no exception
+    }
+
+    @Test
+    void requireDailyBudgetAvailablePassesWhenUnderLimit() {
+        UsageService limited = new UsageService(
+            usageEntries, new UsageBudgetProperties(18, null), Clock.fixed(NOW, ZoneOffset.UTC));
+        when(usageEntries.countByCategoryAndCreatedAtGreaterThanEqual(eq(UsageCategory.CONTENT_ANALYSIS), any()))
+            .thenReturn(17L);
+
+        limited.requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS); // no exception
+    }
+
+    @Test
+    void requireDailyBudgetAvailableThrowsWhenLimitReached() {
+        UsageService limited = new UsageService(
+            usageEntries, new UsageBudgetProperties(18, null), Clock.fixed(NOW, ZoneOffset.UTC));
+        when(usageEntries.countByCategoryAndCreatedAtGreaterThanEqual(eq(UsageCategory.CONTENT_ANALYSIS), any()))
+            .thenReturn(18L);
+
+        assertThrows(DailyBudgetExhaustedException.class,
+            () -> limited.requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS));
     }
 }

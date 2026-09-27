@@ -4,7 +4,7 @@ CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CL
 
 ## 현재 상태
 
-**설치 검증(Installation, App Attest)**, **Job(content_analysis·classification, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)**, **사용량·삭제(UsageEntry, DeletionRequest)** 가 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis·classification) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`, §7의 `GET /v1/usage` · `POST /v1/data-deletions` · `GET /v1/data-deletions/{id}`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "자동 분류", "검색어 해석", "사용량·삭제" 절 참고. 나머지 Job kind(folder_criteria/search_document) 중 `folder_criteria`는 만들지 않기로 결정했고(아래 "사용량·삭제" 절 참고 — 실은 `CapPick-ios/CLAUDE.md`에 근거를 남김), `search_document`는 여전히 없다.
+**설치 검증(Installation, App Attest)**, **Job(content_analysis·classification, Gemini 연동)**, **검색어 해석(`POST /v1/search/prepare`)**, **사용량·삭제(UsageEntry, DeletionRequest)** 가 구현돼 있다 — API 명세 §3의 설치 검증 3개 엔드포인트, §4의 `POST /v1/jobs`(content_analysis·classification) · `GET /v1/jobs/{id}`, §6의 `POST /v1/search/prepare`, §7의 `GET /v1/usage` · `POST /v1/data-deletions` · `GET /v1/data-deletions/{id}`가 실제로 동작한다. 자세한 내용은 아래 "설치 검증", "Job 도메인", "자동 분류", "검색어 해석", "사용량·삭제", "전체 일일 예산 가드" 절 참고. 나머지 Job kind(folder_criteria/search_document) 중 `folder_criteria`는 만들지 않기로 결정했고(아래 "사용량·삭제" 절 참고 — 실은 `CapPick-ios/CLAUDE.md`에 근거를 남김), `search_document`는 여전히 없다.
 
 ## 스택
 
@@ -283,6 +283,51 @@ self-invocation 버그를 고치며 이미 있던 패턴), 삭제된 뒤 도착�
 확인), `AsyncDeletionWorkerTest`(2, 성공/실패 경로에서 전이 메서드 호출 순서 확인),
 `JobServiceTest`(2 추가, Job 제출 시 실제 예약되는지·진행 중 삭제 시 차단되는지),
 `JobStateTransitionsTest`(기존 3개 테스트에 confirm/release 호출 검증 추가).
+
+## 전체 일일 예산 가드 (`UsageService.requireDailyBudgetAvailable`, 2026-09-27)
+
+**문제**: 서버 전체가 Gemini 키 하나를 공유한다(설치별 쿼터 분리 없음, 루트 CLAUDE.md·§14
+미정 사항 참고). 무료 티어 RPD(요청 수/일)는 **키가 아니라 프로젝트 단위**이고(2026-09-27
+웹 확인, `ai.google.dev/gemini-api/docs/rate-limits` — "applied per project, not per API
+key"), 실측치는 content_analysis 계열 flash 모델 20, classification용 flash-lite 500(AI
+Studio 대시보드 2026-09-26 확인, 위 "자동 분류" 절 참고). 진짜 "설치별 격리"를 설계해도 나눌
+파이 자체가 사용자 한 명 몫도 안 될 만큼 작다는 게 근본 제약이라, 지금 단계에서는 **설치별
+공정 분배가 아니라 전체 예산 소진 시 그레이스풀 종료**만 구현했다(사용자 결정, 2026-09-27).
+
+**구현**: `UsageEntryRepository.countByCategoryAndCreatedAtGreaterThanEqual`로 카테고리별 전체
+설치 합산 오늘자 건수를 세고(RESERVED·CONFIRMED·RELEASED 전부 포함 — Gemini가 실패 응답도
+요청 자체는 카운트할 가능성이 있어 확인 안 된 채로 안전한 쪽으로 셌다), `UsageBudgetProperties`
+(`cappick.usage.daily-budget.*`)에 설정된 한도 이상이면 `DailyBudgetExhaustedException` →
+429 `DAILY_BUDGET_EXHAUSTED`(재시도 가능)로 즉시 거부한다. `JobService.submitContentAnalysis`/
+`submitClassification`의 새 Job 생성 경로(멱등 재제출 분기 이후)에서 호출한다. "오늘"의 기준은
+Gemini RPD 리셋 시각인 **태평양 시간 자정**이다(서버 자체는 UTC로 돔, `ClockConfig`) —
+`UsageService.RPD_RESET_ZONE`.
+
+**의도적으로 domain 계층에 "Gemini"라는 이름을 안 끌어들였다** — `UsageBudgetProperties`는
+`GeminiProperties`와 분리된 별도 `@ConfigurationProperties`(컨벤션 #4 "외부 의존성 격리"). 한도
+숫자 자체는 지금 유일한 공급자인 Gemini의 실측 RPD에서 나왔지만, 이 레이어는 그 사실을 몰라도
+되게 했다.
+
+**알려진 한계 (이번엔 안 고침)**:
+- 설치별 공정 분배 없음 — 지금은 실사용 설치가 사실상 1개뿐이라 "한 설치가 예산을 독차지"하는
+  상황 자체가 없다. 진짜 다중 사용자가 생기면 그때 설치별 상한을 추가로 설계해야 한다.
+- content_analysis Job은 실제로 Gemini 호출을 두 번 한다(generateContent + embedContent,
+  `GeminiContentAnalysisClient` 참고). 여기 한도는 generateContent 모델의 실측 RPD 기준이고,
+  embedContent가 쓰는 embedding-model의 실제 RPD는 아직 확인 안 했다 — 더 낮은 것으로 확인되면
+  이 값을 낮춰야 한다.
+- 설정값(content-analysis=18, classification=450)은 실측 RPD(20·500)보다 낮춘 안전 마진일 뿐
+  확정된 제품 정책이 아니다.
+
+**실제 검증 (curl, GEMINI_API_KEY 없이 — 서버 단에서 막히므로 실제 Gemini 쿼터 소모 없음)**:
+`--cappick.usage.daily-budget.content-analysis=2`로 띄운 뒤 새 설치로 content_analysis Job을
+3번 연속 제출 → 실제 로컬 DB에 태평양 시간 "오늘" 기준 이미 쌓여있던 실사용 데이터(7건, 이
+세션에서 실제로 캡처를 분석해본 기록)까지 정확히 집계돼 3번 다 429 `DAILY_BUDGET_EXHAUSTED`로
+즉시 거부되는 것 확인 — 합성 테스트 데이터가 아니라 실제 누적 데이터로 경계 계산이 맞는지까지
+검증한 것.
+
+**테스트 (5개 추가, 총 130개)**: `UsageServiceTest`(3, 한도 미설정 시 통과·한도 이내 통과·한도
+도달 시 예외), `JobServiceTest`(2, 두 kind 모두 제출 시 가드 호출 검증 + content_analysis
+예산 소진 시 Job 미생성 확인).
 
 ## 코딩 컨벤션
 

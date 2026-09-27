@@ -1,6 +1,10 @@
 package com.cappick.domain.usage;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -9,16 +13,24 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.cappick.common.exception.DailyBudgetExhaustedException;
 import com.cappick.domain.installation.Installation;
 
 @Service
 public class UsageService {
 
+    // Gemini 무료 티어 RPD가 리셋되는 기준(2026-09-27 확인, ai.google.dev/gemini-api/docs/rate-limits
+    // "reset daily at midnight Pacific Time") — 서버는 UTC로 도는데(ClockConfig) 예산 가드의 "오늘"은
+    // 이 기준을 따라야 실제 리셋 시점과 맞는다.
+    private static final ZoneId RPD_RESET_ZONE = ZoneId.of("America/Los_Angeles");
+
     private final UsageEntryRepository usageEntries;
+    private final UsageBudgetProperties budget;
     private final Clock clock;
 
-    public UsageService(UsageEntryRepository usageEntries, Clock clock) {
+    public UsageService(UsageEntryRepository usageEntries, UsageBudgetProperties budget, Clock clock) {
         this.usageEntries = usageEntries;
+        this.budget = budget;
         this.clock = clock;
     }
 
@@ -58,6 +70,29 @@ public class UsageService {
         usageEntries.findByInstallationAndOperationKey(installation, operationKey)
             .filter(entry -> entry.getState() == UsageEntryState.RESERVED)
             .ifPresent(UsageEntry::release);
+    }
+
+    /**
+     * 설치 전체 합산으로 오늘(태평양 시간 자정 기준) 이 카테고리에 몇 건이나 예약·확정·해제됐는지
+     * 세어 {@link UsageBudgetProperties}에 설정된 한도 이상이면 거부한다 — Job 제출 트랜잭션
+     * 안에서, 새 Job을 만들기 전에 호출한다(JobService 참고). 설치별 공정 분배는 하지 않는다 —
+     * 지금은 실사용 설치가 사실상 1개뿐이라 "한 설치가 예산을 독차지해 다른 설치를 막는" 상황이
+     * 아직 없고, 진짜 다중 사용자가 생기면 그때 설치별 상한을 별도로 설계한다(서버 CLAUDE.md
+     * "출력 토큰 줄이기"/"API 키 예산 가드" 절 참고). 한도가 설정 안 돼 있으면(값 없음) 그냥
+     * 통과시킨다 — 로컬 개발·기존 테스트가 이 가드 때문에 깨지지 않게 하려는 잠정 기본값이다.
+     */
+    @Transactional(readOnly = true)
+    public void requireDailyBudgetAvailable(UsageCategory category) {
+        budget.limitFor(category).ifPresent(limit -> {
+            long usedToday = usageEntries.countByCategoryAndCreatedAtGreaterThanEqual(category, startOfTodayInResetZone());
+            if (usedToday >= limit) {
+                throw new DailyBudgetExhaustedException(category.toJson());
+            }
+        });
+    }
+
+    private Instant startOfTodayInResetZone() {
+        return ZonedDateTime.now(clock.withZone(RPD_RESET_ZONE)).truncatedTo(ChronoUnit.DAYS).toInstant();
     }
 
     // limit_units·resets_at·can_submit처럼 한도 정책이 필요한 값은 여기서 안 채운다(아직 미정,

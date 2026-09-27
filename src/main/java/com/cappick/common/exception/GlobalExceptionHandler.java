@@ -85,6 +85,11 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.CONFLICT, "DELETION_IN_PROGRESS", "설치 데이터 삭제가 진행 중입니다.", true);
     }
 
+    @ExceptionHandler(DailyBudgetExhaustedException.class)
+    public ResponseEntity<ApiErrorResponse> handleDailyBudgetExhausted(DailyBudgetExhaustedException e) {
+        return error(HttpStatus.TOO_MANY_REQUESTS, "DAILY_BUDGET_EXHAUSTED", "오늘 처리 가능한 요청을 모두 사용했습니다. 내일 다시 시도해 주세요.", true);
+    }
+
     private ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message, boolean retryable) {
         String requestId = "req_" + UUID.randomUUID();
         return ResponseEntity.status(status).body(new ApiErrorResponse(new ApiErrorBody(code, message, retryable), requestId));

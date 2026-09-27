@@ -79,6 +79,8 @@ public class JobService {
             }
             return new JobSubmitted(job.getId(), job.getStatus(), POLL_AFTER_SECONDS);
         }
+        // 멱등 재제출(위 existing 분기)은 예산을 새로 쓰지 않으니 가드 대상이 아니다 — 진짜 새 Job만 확인한다.
+        usageService.requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS);
 
         Job job = Job.builder()
             .id(UUID.randomUUID().toString())
@@ -118,6 +120,7 @@ public class JobService {
             }
             return new JobSubmitted(job.getId(), job.getStatus(), POLL_AFTER_SECONDS);
         }
+        usageService.requireDailyBudgetAvailable(UsageCategory.CLASSIFICATION);
 
         Job job = Job.builder()
             .id(UUID.randomUUID().toString())
