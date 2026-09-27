@@ -35,11 +35,16 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
     private static final String GENERATE_CONTENT_PATH = "/v1beta/models/{model}:generateContent";
     private static final String EMBED_CONTENT_PATH = "/v1beta/models/{model}:embedContent";
 
+    // 2026-09-27: 출력 토큰(=비용) 절감을 위해 observed_evidence·search_text에 분량 제한을 명시했다.
+    // ocr_text는 건드리지 않는다 — "있는 그대로 전부" 추출이 OCR의 핵심 기능이라, 텍스트 밀도가
+    // 높은 캡처(문서·책 페이지 등)는 원래도 길게 나오는 게 정상이고 여기를 줄이면 검색 품질이
+    // 떨어진다. observed_evidence 개수 제한은 스키마(analysisSchema의 maxItems)로도 강제한다 —
+    // 프롬프트 지시만으로는 모델이 안 지킬 수 있어서 이중 안전장치를 둔다.
     private static final String PROMPT = """
         이 이미지는 사용자의 휴대폰 스크린샷입니다. 아래 세 가지를 JSON으로 생성하세요.
         1. ocr_text: 이미지에서 읽을 수 있는 글자를 있는 그대로 추출합니다. 글자가 없으면 빈 문자열입니다.
-        2. observed_evidence: 이미지에서 실제로 관찰 가능한 사실만 나열합니다. 사용자의 의도·목적을 추측하거나 이미지에 없는 내용을 추가하지 마세요.
-        3. search_text: 나중에 사용자가 자연어로 검색했을 때 이 캡처를 찾을 수 있도록 주제와 맥락을 요약한 짧은 한국어 텍스트입니다.""";
+        2. observed_evidence: 이미지에서 실제로 관찰 가능한 사실만, 분류 판단에 필요한 만큼만 나열합니다. 최대 5개, 각 항목은 한 문장(30자 내외)으로 짧게 씁니다. 사용자의 의도·목적을 추측하거나 이미지에 없는 내용을 추가하지 마세요.
+        3. search_text: 나중에 사용자가 자연어로 검색했을 때 이 캡처를 찾을 수 있도록 주제와 맥락을 요약합니다. 1~2문장, 60자 이내의 짧은 한국어 텍스트입니다.""";
 
     private final RestClient restClient;
     private final GeminiProperties properties;
@@ -141,8 +146,16 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         props.putObject("ocr_text").put("type", "STRING");
         ObjectNode evidence = props.putObject("observed_evidence");
         evidence.put("type", "ARRAY");
-        evidence.putObject("items").put("type", "STRING");
-        props.putObject("search_text").put("type", "STRING");
+        // maxItems는 Gemini structured output이 실제로 강제하는 필드다(문서화됨) — 프롬프트 지시가
+        // 안 지켜져도 5개를 넘지 않는다는 걸 보장한다. items.maxLength는 강제 여부가 불확실해서
+        // best-effort 힌트로만 추가한다(안 지켜져도 손해는 없음, 프롬프트의 "30자 내외"가 주된 수단).
+        evidence.put("maxItems", 5);
+        ObjectNode evidenceItems = evidence.putObject("items");
+        evidenceItems.put("type", "STRING");
+        evidenceItems.put("maxLength", 60);
+        ObjectNode searchText = props.putObject("search_text");
+        searchText.put("type", "STRING");
+        searchText.put("maxLength", 120);
         ArrayNode required = schema.putArray("required");
         required.add("ocr_text");
         required.add("observed_evidence");
