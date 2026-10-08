@@ -46,6 +46,15 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         2. observed_evidence: 이미지에서 실제로 관찰 가능한 사실만, 분류 판단에 필요한 만큼만 나열합니다. 최대 5개, 각 항목은 한 문장(30자 내외)으로 짧게 씁니다. 사용자의 의도·목적을 추측하거나 이미지에 없는 내용을 추가하지 마세요.
         3. search_text: 나중에 사용자가 자연어로 검색했을 때 이 캡처를 찾을 수 있도록 주제와 맥락을 요약합니다. 1~2문장, 60자 이내의 짧은 한국어 텍스트입니다.""";
 
+    // 2026-10-08: 클라이언트가 기기에서 OCR한 텍스트(ocrTextHint)를 보내면 모델에게 ocr_text를
+    // 아예 시키지 않는다 — 출력 토큰의 절반가량이 OCR 받아쓰기였고, gemini-3.5-flash-lite는 글자가
+    // 많은 화면에서 OCR을 빠뜨리는 게 실측으로 확인됐다(서버 CLAUDE.md 참고). 이미지는 그대로
+    // 보내므로 관찰·요약은 모델이 직접 화면을 보고 한다. OCR 텍스트는 입력으로도 다시 넣지 않는다.
+    private static final String PROMPT_WITHOUT_OCR = """
+        이 이미지는 사용자의 휴대폰 스크린샷입니다. 아래 두 가지를 JSON으로 생성하세요.
+        1. observed_evidence: 이미지에서 실제로 관찰 가능한 사실만, 분류 판단에 필요한 만큼만 나열합니다. 최대 5개, 각 항목은 한 문장(30자 내외)으로 짧게 씁니다. 사용자의 의도·목적을 추측하거나 이미지에 없는 내용을 추가하지 마세요.
+        2. search_text: 나중에 사용자가 자연어로 검색했을 때 이 캡처를 찾을 수 있도록 주제와 맥락을 요약합니다. 1~2문장, 60자 이내의 짧은 한국어 텍스트입니다.""";
+
     private final RestClient restClient;
     private final GeminiProperties properties;
     private final ObjectMapper objectMapper;
@@ -63,7 +72,9 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         if (!properties.isConfigured()) {
             throw new ContentAnalysisException("GEMINI_API_KEY가 설정되지 않았습니다.");
         }
-        JsonNode analysis = generateAnalysis(request);
+        // 힌트가 비어 있으면(클라이언트 OCR 실패·글자 없음) 예전처럼 모델이 OCR까지 한다.
+        boolean hasClientOcr = request.ocrTextHint() != null && !request.ocrTextHint().isBlank();
+        JsonNode analysis = generateAnalysis(request, hasClientOcr);
         String searchText = analysis.path("search_text").asString("");
         List<Double> embedding = embed(searchText);
 
@@ -71,7 +82,7 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         analysis.path("observed_evidence").forEach(node -> evidence.add(node.asString()));
 
         return new ContentAnalysisResult(
-            analysis.path("ocr_text").asString(""),
+            hasClientOcr ? request.ocrTextHint() : analysis.path("ocr_text").asString(""),
             evidence,
             searchText,
             embedding,
@@ -79,19 +90,19 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         );
     }
 
-    private JsonNode generateAnalysis(ContentAnalysisRequest request) {
+    private JsonNode generateAnalysis(ContentAnalysisRequest request, boolean hasClientOcr) {
         ObjectNode body = objectMapper.createObjectNode();
         ArrayNode contents = body.putArray("contents");
         ObjectNode content = contents.addObject();
         ArrayNode parts = content.putArray("parts");
-        parts.addObject().put("text", PROMPT);
+        parts.addObject().put("text", hasClientOcr ? PROMPT_WITHOUT_OCR : PROMPT);
         ObjectNode inlineData = parts.addObject().putObject("inline_data");
         inlineData.put("mime_type", request.mimeType());
         inlineData.put("data", Base64.getEncoder().encodeToString(request.imageBytes()));
 
         ObjectNode generationConfig = body.putObject("generationConfig");
         generationConfig.put("responseMimeType", "application/json");
-        generationConfig.set("responseSchema", analysisSchema());
+        generationConfig.set("responseSchema", analysisSchema(!hasClientOcr));
 
         JsonNode response = callGemini(GENERATE_CONTENT_PATH, properties.model(), body);
         String text = response.path("candidates").path(0).path("content").path("parts").path(0)
@@ -139,11 +150,13 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         }
     }
 
-    private JsonNode analysisSchema() {
+    private JsonNode analysisSchema(boolean includeOcrText) {
         ObjectNode schema = objectMapper.createObjectNode();
         schema.put("type", "OBJECT");
         ObjectNode props = schema.putObject("properties");
-        props.putObject("ocr_text").put("type", "STRING");
+        if (includeOcrText) {
+            props.putObject("ocr_text").put("type", "STRING");
+        }
         ObjectNode evidence = props.putObject("observed_evidence");
         evidence.put("type", "ARRAY");
         // maxItems는 Gemini structured output이 실제로 강제하는 필드다(문서화됨) — 프롬프트 지시가
@@ -157,7 +170,9 @@ public class GeminiContentAnalysisClient implements ContentAnalysisClient {
         searchText.put("type", "STRING");
         searchText.put("maxLength", 120);
         ArrayNode required = schema.putArray("required");
-        required.add("ocr_text");
+        if (includeOcrText) {
+            required.add("ocr_text");
+        }
         required.add("observed_evidence");
         required.add("search_text");
         return schema;

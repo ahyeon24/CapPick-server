@@ -101,6 +101,28 @@ API 명세 §4의 4개 kind 중 **content_analysis만** 구현했다. 나머지(
 
 **출력 토큰(=비용) 줄이기 (2026-09-27).** 실사용 데이터 기반 비용 추정(월 1000장 기준 사용자당 2~4만원)을 보고 가장 손대기 쉬운 지점부터 줄였다 — `GeminiContentAnalysisClient.PROMPT`에서 `observed_evidence`는 "최대 5개, 각 30자 내외", `search_text`는 "1~2문장, 60자 이내"로 명시하고, `analysisSchema()`에도 `observed_evidence`에 `maxItems: 5`(Gemini structured output이 실제로 강제하는 걸로 문서화된 필드)를 추가했다. `items`/`search_text`의 `maxLength`는 강제 여부가 불확실해 best-effort 힌트로만 추가함(안 지켜져도 손해 없음). **`ocr_text`는 의도적으로 안 건드렸다** — "있는 그대로 전부" 추출이 OCR의 핵심 기능이라 여길 줄이면 검색 품질이 떨어진다(텍스트 밀도 높은 캡처는 원래도 출력이 길어지는 게 정상). **아직 실제 Gemini 호출로 토큰 감소량을 검증하지 않았다** — 무료 티어 RPD 예산이 빠듯해서(위 "자동 분류" 절 참고) 검증용 호출도 비용이라 사용자와 상의 후 실행할 것. 기존 `MockRestServiceServer` 기반 단위 테스트는 응답 바디만 고정하고 요청 스키마는 검증하지 않아 이 변경으로 깨지지 않음(전체 테스트 재확인 완료).
 
+**분석 모델을 flash-lite로 내리고 OCR을 기기로 옮김 (2026-10-08, 사용자 결정 — 비용 절감).**
+`cappick.ai.gemini.model=gemini-3.5-flash-lite`(유료 단가 입력 $0.30·출력 $2.50 / 1M, flash의 약
+1/4). `gemini-eval/`의 18장(맥 스크린샷)으로 실제 호출해 잰 값(환율 1,400원 가정):
+
+| 구성 | 입력 토큰 | 출력 토큰 | 장당 |
+|---|---|---|---|
+| flash-lite, 모델이 OCR까지 | 1,253 | 239 | 약 1.4원 |
+| flash-lite, OCR은 기기(관찰·요약만) | 1,223 | 95 | 약 0.85원 |
+
+생각 토큰은 한 번도 안 붙었고, 9/27의 분량 제한(observed_evidence 최대 5개·search_text 60자)도
+실제로 지켜졌다(위 "출력 토큰 줄이기" 문단의 "아직 검증 안 함"은 이걸로 해소). **flash-lite는
+글자 많은 화면에서 OCR을 빠뜨린다** — 04번(강의 슬라이드 3장이 한 화면)은 9월 flash 계열이
+1,066자를 읽었는데 190자만 읽었다. 그래서 OCR은 앱이 Apple Vision으로 해서 `metadata.ocr_text`
+(API 명세 §4 "선택 ocr_text", 원래부터 `ContentAnalysisRequest.ocrTextHint`까지 배선돼 있던 값)로
+보내고, `GeminiContentAnalysisClient`는 힌트가 있으면 `PROMPT_WITHOUT_OCR`·ocr_text 없는 스키마로
+호출한 뒤 힌트를 그대로 결과 `ocr_text`로 돌려준다. **힌트가 비어 있으면(기기 인식 실패·글자
+없음) 예전처럼 모델이 OCR까지 한다.** OCR 텍스트를 모델 입력으로 다시 넣지는 않는다(이미지를
+직접 보므로). 같은 `model` 값이 `/v1/search/prepare`에도 쓰이는데 그쪽은 flash-lite로 실제 호출해
+본 적이 없다. 일일 예산도 두 kind가 같은 RPD 500을 나눠 쓰게 돼서 content-analysis=200·
+classification=250으로 다시 나눴다. 테스트 2개 추가(힌트 사용·빈 힌트 폴백), 총 133개 통과.
+비교 스크립트·결과 화면은 `../gemini-eval/`(git 밖)에 있다.
+
 **테스트 (15개 추가, 총 86개 전부 통과):** `JobServiceTest`(5, 멱등성·소유권), `JobStateTransitionsTest`(4, 상태 전이 로직), `AsyncContentAnalysisWorkerTest`(2, 오케스트레이션 — 실제 버그를 재현하진 못하는 한계가 있다는 걸 위 문단에 명시함), `GeminiContentAnalysisClientTest`(4, `MockRestServiceServer`로 실제 검증된 요청/응답 형태 고정).
 
 ## 자동 분류 (`classification` Job kind, AI-03, 2026-09-25)
@@ -164,6 +186,26 @@ content_analysis+classification 두 요청을 같은 20 RPD에서 나눠 써서 
 content_analysis 20 RPD를 거의 그대로 다 쓸 수 있다(classification은 별도 500 RPD라 병목이 아님).
 `gemini-3.8-flash`로 올리지 않은 이유는 RPD가 3.5와 동일한데 출시 직후 503 과부하를 이미 겪은
 전례가 있어서다(위 "실제 검증" 절 4번 참고) — 리스크만 지고 얻는 게 없다.
+
+**출력 토큰(=비용) 줄이기 (2026-10-08).** 분류 비용이 폴더 수에 비례해 늘던 원인은 모델이
+폴더마다 써내던 출력이었다(로컬 DB의 실제 결과 5건 기준 폴더당 JSON 약 150자 — 36자 UUID
+되받아쓰기 + no_match에도 붙던 근거 문장). 두 가지를 바꿨다: (1) 모델과는 실제 `folder_id` 대신
+요청 순서대로 매긴 번호(1부터)만 주고받고 `GeminiClassificationClient`가 다시 `folder_id`로
+되돌린다, (2) `evidence`는 match일 때만(한 문장 40자 내외) 쓰게 하고 스키마 `required`에서 뺐다 —
+no_match·uncertain은 `evidence`가 빈 문자열로 나간다. API 응답 모양은 그대로다(`folder_id`·
+`evidence` 필드 유지). **앱 쪽 영향**: 자동 분류는 match의 근거만 저장하므로 변화 없음. RECLASS-01
+미리보기의 "자동 제거 예정" 행은 이제 근거 문구가 안 나온다(앱이 빈 근거는 숨김). "요청에 없는
+폴더는 버리고 빠진 폴더는 uncertain" 불변식은 번호 기준으로 그대로 유지. 테스트 1개 추가(번호↔ID
+매핑·요청 본문에 실제 ID가 안 나가는지·evidence 생략 처리).
+
+**실제 Gemini 검증 (2026-10-08, `../gemini-eval/classify_*.py`, 18장 × 테스트 폴더 5개, flash-lite)**:
+장당 평균 출력 435→151토큰, 입력 786→652토큰, 약 1.85원→0.80원(환율 1,400원 가정). 같은 요청을
+4번씩 보내 보니 **형식과 무관하게 판정이 원래 흔들렸다**(회차마다 갈린 폴더 판정: 변경 전 10/90,
+변경 후 9/90 — 전부 "공부"·"코딩" 같은 한 단어 기준의 경계 사례). 다만 변경 후에는 uncertain이
+줄고 match/no_match로 확정하는 쪽으로 성향이 조금 바뀌었다. 흔들림을 줄이려고
+`generationConfig.temperature=0`을 넣었고, 같은 테스트(3회씩)에서 갈린 판정이 2/90으로 줄었다
+(완전히 0은 아님). 시뮬레이터 E2E로도 확인: 새 스크린샷 3장이 content_analysis→classification
+전부 SUCCEEDED, 사주 화면이 "운세" 폴더에 자동으로 들어갔다.
 
 **테스트 (12개 추가, 총 106개)**: `JobServiceTest`(4, classification 제출·멱등성·GET 파싱),
 `AsyncClassificationWorkerTest`(2), `JobStateTransitionsTest`(1),

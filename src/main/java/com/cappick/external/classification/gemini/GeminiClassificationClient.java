@@ -30,10 +30,16 @@ import com.cappick.external.contentanalysis.gemini.GeminiProperties;
  * generateContent 호출 방식(구조화 출력, x-goog-api-key 헤더)은 같지만 코드는 공유하지 않는다 —
  * 같은 이유(공급자가 서로 독립적으로 바뀔 수 있어야 함, 컨벤션 #8)다. GeminiProperties만 재사용한다.
  *
- * <p>모델이 folder_id를 잘못 옮기거나 일부 폴더를 응답에서 빠뜨릴 가능성을 신뢰하지 않는다 — 응답을
- * 요청한 폴더 집합과 대조해 (1) 요청에 없는 folder_id는 버리고 (2) 응답에 없는 folder_id는
+ * <p>모델이 폴더를 잘못 가리키거나 일부 폴더를 응답에서 빠뜨릴 가능성을 신뢰하지 않는다 — 응답을
+ * 요청한 폴더 집합과 대조해 (1) 요청에 없는 폴더 번호는 버리고 (2) 응답에 없는 폴더는
  * uncertain으로 채워 넣어, 항상 요청한 폴더 수만큼 정확히 하나씩의 판정을 돌려준다는 불변식을
  * 여기서 보장한다(API 명세 §4: "누락된 판정은 성공한 no_match로 간주하지 않는다").
+ *
+ * <p>2026-10-08: 출력 토큰(=비용) 절감을 위해 두 가지를 바꿨다. 비용이 폴더 수에 비례해 늘던
+ * 원인이 폴더마다 써내던 출력이었다. (1) 모델과는 실제 folder_id(36자 UUID) 대신 요청 순서대로
+ * 매긴 번호(1부터)만 주고받고, 여기서 다시 folder_id로 되돌린다. (2) evidence는 match일 때만
+ * 쓰게 한다 — 클라이언트가 저장하는 근거는 match뿐이라 no_match·uncertain의 근거 문장은 버려지던
+ * 출력이었다. 그 경우 evidence는 빈 문자열로 나간다.
  */
 @Service
 public class GeminiClassificationClient implements ClassificationClient {
@@ -49,7 +55,8 @@ public class GeminiClassificationClient implements ClassificationClient {
         2. 폴더 기준에 직접적인 근거가 있을 때만 match입니다. 간접적인 연관성만으로 추측하지 않습니다.
         3. 여러 폴더에 각각 직접 근거가 있으면 모두 match일 수 있습니다. 우선순위를 두지 않습니다.
         4. 직접 근거가 없어 판단하기 애매하면 uncertain입니다. no_match는 명백히 해당하지 않을 때만 씁니다.
-        5. match일 때 evidence에는 실제로 관찰된 근거를 구체적으로 적습니다. 사용자의 의도·목적을 추측해서 적지 않습니다.
+        5. match일 때만 evidence에 실제로 관찰된 근거를 한 문장(40자 내외)으로 적습니다. 사용자의 의도·목적을 추측해서 적지 않습니다.
+        6. no_match와 uncertain에는 evidence를 쓰지 않습니다(생략).
 
         예: "자바 면접 예상 질문"이라는 텍스트가 있고 폴더 기준이 "면접 질문·자기소개·면접 안내"면 match.
         같은 폴더 기준에 면접 언급 없는 자바 코드만 있으면 no_match(간접 연관성만 있음).
@@ -79,23 +86,25 @@ public class GeminiClassificationClient implements ClassificationClient {
         }
 
         JsonNode response = callGemini(request);
-        Map<String, ClassificationDecisionResult> byFolderId = new HashMap<>();
+        // 키는 buildPrompt가 매긴 폴더 번호(1부터)다.
+        Map<Integer, ClassificationDecisionResult> byFolderNumber = new HashMap<>();
         response.path("decisions").forEach(node -> {
-            String folderId = node.path("folder_id").asString(null);
-            if (folderId == null) {
+            int folderNumber = node.path("folder").asInt(0);
+            if (folderNumber < 1 || folderNumber > request.folders().size()) {
                 return;
             }
             ClassificationDecision decision = parseDecision(node.path("decision").asString("uncertain"));
-            byFolderId.put(folderId, new ClassificationDecisionResult(
-                folderId, 0, decision, node.path("evidence").asString("")));
+            byFolderNumber.put(folderNumber, new ClassificationDecisionResult(
+                request.folders().get(folderNumber - 1).id(), 0, decision, node.path("evidence").asString("")));
         });
 
-        // 요청한 폴더 집합을 기준으로 재구성한다 — 모델이 지어낸 folder_id는 버리고(요청에 없으므로
-        // byFolderId에서 못 찾을 뿐 아니라 애초에 아래 루프가 요청 목록만 순회한다), 응답에서 빠진
-        // 폴더는 uncertain으로 채운다. criteriaVersion은 모델 응답이 아니라 항상 요청 값을 쓴다.
+        // 요청한 폴더 집합을 기준으로 재구성한다 — 모델이 지어낸 폴더 번호는 위에서 이미 버렸고
+        // 애초에 아래 루프가 요청 목록만 순회한다. 응답에서 빠진 폴더는 uncertain으로 채운다.
+        // criteriaVersion은 모델 응답이 아니라 항상 요청 값을 쓴다.
         List<ClassificationDecisionResult> decisions = new ArrayList<>();
-        for (ClassificationFolderCriteria folder : request.folders()) {
-            ClassificationDecisionResult found = byFolderId.get(folder.id());
+        for (int i = 0; i < request.folders().size(); i++) {
+            ClassificationFolderCriteria folder = request.folders().get(i);
+            ClassificationDecisionResult found = byFolderNumber.get(i + 1);
             if (found != null) {
                 decisions.add(new ClassificationDecisionResult(
                     folder.id(), folder.criteriaVersion(), found.decision(), found.evidence()));
@@ -117,6 +126,9 @@ public class GeminiClassificationClient implements ClassificationClient {
         ObjectNode generationConfig = body.putObject("generationConfig");
         generationConfig.put("responseMimeType", "application/json");
         generationConfig.set("responseSchema", decisionSchema());
+        // 같은 캡처·같은 폴더 기준이면 매번 같은 판정이 나오게 무작위성을 끈다(2026-10-08). 기본값으로
+        // 같은 요청을 4번씩 보내 보니 폴더 판정 90개 중 9~10개가 회차마다 갈렸다(서버 CLAUDE.md 참고).
+        generationConfig.put("temperature", 0);
 
         // content_analysis(properties.model())와 다른 모델을 쓴다 — 2026-09-26 결정,
         // GeminiProperties.classificationModel() 문서 참고(무료 티어 RPD가 모델별로 분리돼 있어서
@@ -148,11 +160,11 @@ public class GeminiClassificationClient implements ClassificationClient {
             }
         }
         sb.append("\n판단할 폴더 목록:\n");
-        for (ClassificationFolderCriteria folder : request.folders()) {
-            sb.append("- folder_id: ").append(folder.id())
-                .append(", 분류 기준: ").append(folder.criteriaText()).append('\n');
+        for (int i = 0; i < request.folders().size(); i++) {
+            sb.append("- 폴더 ").append(i + 1)
+                .append(", 분류 기준: ").append(request.folders().get(i).criteriaText()).append('\n');
         }
-        sb.append("\n위 folder_id 각각에 대해 decisions 배열에 판정을 하나씩 담아 JSON으로 응답하세요.");
+        sb.append("\n위 폴더 번호 각각에 대해 decisions 배열에 판정을 하나씩 담아 JSON으로 응답하세요. folder에는 폴더 번호를 숫자로 적습니다.");
         return sb.toString();
     }
 
@@ -187,7 +199,7 @@ public class GeminiClassificationClient implements ClassificationClient {
         ObjectNode item = decisions.putObject("items");
         item.put("type", "OBJECT");
         ObjectNode itemProps = item.putObject("properties");
-        itemProps.putObject("folder_id").put("type", "STRING");
+        itemProps.putObject("folder").put("type", "INTEGER");
         ObjectNode decisionEnum = itemProps.putObject("decision");
         decisionEnum.put("type", "STRING");
         ArrayNode enumValues = decisionEnum.putArray("enum");
@@ -196,9 +208,9 @@ public class GeminiClassificationClient implements ClassificationClient {
         enumValues.add("uncertain");
         itemProps.putObject("evidence").put("type", "STRING");
         ArrayNode itemRequired = item.putArray("required");
-        itemRequired.add("folder_id");
+        itemRequired.add("folder");
         itemRequired.add("decision");
-        itemRequired.add("evidence");
+        // evidence는 required가 아니다 — match일 때만 쓰게 한다(클래스 주석 참고).
         ArrayNode required = schema.putArray("required");
         required.add("decisions");
         return schema;

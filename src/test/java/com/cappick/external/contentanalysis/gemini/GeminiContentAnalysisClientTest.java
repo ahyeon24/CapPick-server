@@ -2,6 +2,9 @@ package com.cappick.external.contentanalysis.gemini;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -62,6 +65,55 @@ class GeminiContentAnalysisClientTest {
         assertEquals("행렬곱 문제", result.observedEvidence().get(0));
         assertEquals(java.util.List.of(0.1, 0.2, 0.3), result.embedding());
         assertEquals("gemini-embedding-001", result.embeddingModelVersion());
+        server.verify();
+    }
+
+    @Test
+    void clientOcrHintIsReturnedAsIsAndModelIsNotAskedForOcrText() {
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+
+        server.expect(requestTo(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+            .andExpect(content().string(not(containsString("ocr_text"))))
+            .andExpect(content().string(not(containsString("기기에서 읽은 글자"))))
+            .andRespond(withSuccess("""
+                {"candidates":[{"content":{"parts":[{"text":"{\\"observed_evidence\\":[\\"행렬곱 문제\\"],\\"search_text\\":\\"알고리즘 실습 자료\\"}"}]}}]}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"))
+            .andRespond(withSuccess("""
+                {"embedding":{"values":[0.1]}}
+                """, MediaType.APPLICATION_JSON));
+
+        ContentAnalysisResult result = client.analyze(
+            new ContentAnalysisRequest(new byte[]{1, 2, 3}, "image/jpeg", "기기에서 읽은 글자"));
+
+        assertEquals("기기에서 읽은 글자", result.ocrText());
+        assertEquals("알고리즘 실습 자료", result.searchText());
+        assertEquals(java.util.List.of("행렬곱 문제"), result.observedEvidence());
+        server.verify();
+    }
+
+    @Test
+    void blankClientOcrHintFallsBackToModelOcr() {
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+
+        server.expect(requestTo(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
+            .andExpect(content().string(containsString("ocr_text")))
+            .andRespond(withSuccess("""
+                {"candidates":[{"content":{"parts":[{"text":"{\\"ocr_text\\":\\"모델이 읽은 글자\\",\\"observed_evidence\\":[],\\"search_text\\":\\"s\\"}"}]}}]}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"))
+            .andRespond(withSuccess("""
+                {"embedding":{"values":[0.1]}}
+                """, MediaType.APPLICATION_JSON));
+
+        ContentAnalysisResult result = client.analyze(
+            new ContentAnalysisRequest(new byte[]{1}, "image/jpeg", "  "));
+
+        assertEquals("모델이 읽은 글자", result.ocrText());
         server.verify();
     }
 
