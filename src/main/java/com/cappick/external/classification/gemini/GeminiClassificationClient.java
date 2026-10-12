@@ -25,8 +25,7 @@ import com.cappick.external.classification.ClassificationResult;
 import com.cappick.external.contentanalysis.gemini.GeminiProperties;
 
 /**
- * Gemini 기반 구현. {@link com.cappick.external.contentanalysis.gemini.GeminiContentAnalysisClient}·
- * {@link com.cappick.external.searchinterpretation.gemini.GeminiSearchInterpretationClient}와
+ * Gemini 기반 구현. {@link com.cappick.external.contentanalysis.gemini.GeminiContentAnalysisClient}와
  * generateContent 호출 방식(구조화 출력, x-goog-api-key 헤더)은 같지만 코드는 공유하지 않는다 —
  * 같은 이유(공급자가 서로 독립적으로 바뀔 수 있어야 함, 컨벤션 #8)다. GeminiProperties만 재사용한다.
  *

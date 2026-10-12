@@ -37,7 +37,7 @@ class AsyncContentAnalysisWorkerTest {
     @Test
     void successfulAnalysisMarksRunningThenSucceeded() {
         ContentAnalysisResult result = new ContentAnalysisResult(
-            "ocr", List.of("evidence"), "search", List.of(0.1), "embed-v1");
+            "ocr", List.of("evidence"), "search");
         when(contentAnalysisClient.analyze(any())).thenReturn(result);
 
         worker.run("job-1", new byte[]{1, 2, 3}, "image/jpeg", "hint");
@@ -52,7 +52,7 @@ class AsyncContentAnalysisWorkerTest {
     @Test
     void passesThroughTheActualMimeTypeInsteadOfHardcodingIt() {
         ContentAnalysisResult result = new ContentAnalysisResult(
-            "ocr", List.of(), "search", List.of(), "embed-v1");
+            "ocr", List.of(), "search");
         when(contentAnalysisClient.analyze(any())).thenReturn(result);
         ArgumentCaptor<ContentAnalysisRequest> captor = ArgumentCaptor.forClass(ContentAnalysisRequest.class);
 

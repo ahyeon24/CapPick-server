@@ -14,11 +14,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * classification 450 — 실측 RPD 20·500 대비 여유). 이 마진 자체는 임의로 고른 엔지니어링
  * 여유값이지 확정된 제품 정책이 아니다 — 실측 RPD가 바뀌면 이 값도 다시 맞춰야 한다.
  *
- * <p>⚠️ content_analysis 카테고리는 실제로 Gemini 호출을 두 번(generateContent + embedContent,
- * {@link com.cappick.external.contentanalysis.gemini.GeminiContentAnalysisClient} 참고) 한다.
- * 여기 한도는 generateContent 모델(gemini-3.5-flash)의 실측 RPD 기준이고, embedContent가 쓰는
- * embedding-model의 실제 RPD는 아직 확인 안 했다 — 더 낮은 것으로 확인되면 이 값을 그에 맞춰
- * 낮춰야 한다(과대평가하지 않도록 지금은 모른다고 명시해둔다).
+ * <p>2026-10-08부터 content_analysis는 Gemini 호출이 한 번(generateContent)뿐이다 — 예전에 같이
+ * 하던 embedContent는 검색 온디바이스 전환으로 없어졌다.
  */
 @ConfigurationProperties(prefix = "cappick.usage.daily-budget")
 public record UsageBudgetProperties(Integer contentAnalysis, Integer classification) {

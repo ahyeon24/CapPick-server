@@ -46,7 +46,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void classifyReturnsOneDecisionPerRequestedFolderUsingRequestedCriteriaVersion() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
@@ -68,7 +68,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void folderMissingFromResponseBecomesUncertainNotSilentNoMatch() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
@@ -86,7 +86,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void folderNumberHallucinatedByModelButNotRequestedIsDropped() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))
@@ -104,7 +104,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void modelSeesFolderNumbersNotIdsAndNumbersMapBackToRequestedIds() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-classification-model"));
 
         // 응답 순서를 요청 순서와 다르게 줘서 번호로 되돌리는지 확인한다. no_match에는 evidence가 없다.
         server.expect(requestTo(
@@ -135,7 +135,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void missingApiKeyFailsFastWithoutCallingNetwork() {
-        setUp(new GeminiProperties("", "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
+        setUp(new GeminiProperties("", "gemini-content-analysis-model", "gemini-classification-model"));
 
         assertThrows(ClassificationException.class, () -> client.classify(new ClassificationRequest(
             "ocr", List.of(), List.of(new ClassificationFolderCriteria("folder-1", "기준", 1)))));
@@ -143,7 +143,7 @@ class GeminiClassificationClientTest {
 
     @Test
     void serverErrorIsWrappedAsClassificationException() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-embedding-001", "gemini-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-content-analysis-model", "gemini-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-classification-model:generateContent"))

@@ -215,7 +215,33 @@ folder_id 제거 케이스 포함). **실제 Gemini 응답으로 검증한 적�
 프롬프트·스키마는 `GeminiSearchInterpretationClient`와 마찬가지로 **아직 한 번도 진짜 Gemini
 응답으로 확인 안 된 잠정 형태**다. 다음에 Gemini가 정상 동작할 때 실제 응답부터 확인할 것.
 
-## 검색어 해석 (`POST /v1/search/prepare`, 2026-09-22)
+## search_text에 관련 단어 덧붙이기 (2026-10-12)
+
+기기 검색 모델(e5-small)이 "운세"↔"사주", "구제"↔"빈티지"를 약하게만 연결해서 화면에 그 글자가
+없으면 검색에서 빠지거나 관련 없는 캡처와 섞였다(사용자가 시뮬레이터에서 발견). 그래서
+`GeminiContentAnalysisClient`의 두 프롬프트 모두 `search_text`를 "요약 한 문장(40자 이내) |
+비슷한 말·상위 분류어 5~8개" 형식으로 쓰게 바꿨다(스키마 maxLength 120→200). 예: "사주 풀이와
+신살 정보가 표시된 화면입니다. | 사주 운세 명식 천간 지지 십성 길성 신살". 프롬프트의 예시는
+일부러 테스트 캡처와 무관한 것(파스타 식당·운동화)을 썼다. **비용**: 같은 18장 실측으로 장당
+0.846원→0.923원(입력 1,223→1,324, 출력 95→105토큰). **효과(시뮬레이터 캡처 10장 재분석 후
+실제 순위 로직으로 확인)**: "운세"→사주가 글자 일치로 잡힘, "빈티지"→구제샵 목록도 나옴,
+"옷가게"→매장 2곳. **안 고쳐진 것**: "구제"로 코너스토리 빈티지가 안 나옴(모델이 그 요약에
+"구제"를 안 넣음 — 관련 단어 선택은 모델 재량이라 보장되지 않는다), 관련 캡처가 없는 검색어
+("고양이 사진")는 여전히 여러 장이 나옴. 분류는 search_text를 쓰지 않아 영향 없다. 이미 분석된
+캡처는 다시 분석해야 새 형식이 된다.
+
+## 검색 관련 코드 제거 (2026-10-08)
+
+검색을 기기에서만 처리하기로 한 결정(2026-09-25, 사용자)에 맞춰 서버에서 검색에 쓰이던 것을 전부
+뺐다: `POST /v1/search/prepare`(`domain/search`), `external/searchinterpretation`,
+`SearchInterpretationException`·`SearchModelMismatchException`과 그 핸들러,
+`GeminiContentAnalysisClient`의 embedContent 호출, `ContentAnalysisResult(DTO)`의 `embedding`·
+`embedding_model_version`, `GeminiProperties.embeddingModel`·`cappick.ai.gemini.embedding-model`.
+**캡처 한 장에 Gemini 호출은 이제 generateContent 한 번뿐이다.** API 명세 v0.2 §4(결과에
+embedding 포함)·§6(search/prepare)과 달라졌으니 문서 개정 때 반영해야 한다. 테스트 125개 통과
+(검색 관련 8개 삭제). 아래 "검색어 해석" 절과 이 문서 곳곳의 embedding 언급은 제거 전 기록이다.
+
+## 검색어 해석 (`POST /v1/search/prepare`, 2026-09-22) — 2026-10-08 제거됨
 
 API 명세 §6. **Job이 아니다** — `content_analysis`처럼 큐잉·폴링하지 않는 동기 요청/응답 하나로 끝난다.
 `domain/search/{SearchController, SearchService, dto/}`, `external/searchinterpretation/{SearchInterpretationClient

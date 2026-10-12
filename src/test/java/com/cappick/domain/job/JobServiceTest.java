@@ -158,7 +158,7 @@ class JobServiceTest {
         job.start();
         JsonMapper mapper = JsonMapper.builder().build();
         String resultJson = mapper.writeValueAsString(new ContentAnalysisResultDTO(
-            3, "ocr", java.util.List.of("evidence 1"), "search text", java.util.List.of(0.1, 0.2), "embed-v1"));
+            3, "ocr", java.util.List.of("evidence 1"), "search text"));
         job.succeed(resultJson, NOW, NOW.plusSeconds(3600));
         when(jobs.findByIdAndInstallation("job-1", installation)).thenReturn(Optional.of(job));
 

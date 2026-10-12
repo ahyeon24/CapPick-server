@@ -66,7 +66,7 @@ class JobStateTransitionsTest {
         job.start();
 
         transitions.markSucceeded("job-1", new ContentAnalysisResult(
-            "ocr text", List.of("evidence 1"), "search text", List.of(0.1, 0.2), "embed-v1"));
+            "ocr text", List.of("evidence 1"), "search text"));
 
         assertEquals(JobStatus.SUCCEEDED, job.getStatus());
         assertNotNull(job.getResultJson());

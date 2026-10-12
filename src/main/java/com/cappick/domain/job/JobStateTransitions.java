@@ -55,7 +55,7 @@ public class JobStateTransitions {
         jobs.findById(jobId).ifPresent(job -> {
             ContentAnalysisResultDTO dto = new ContentAnalysisResultDTO(
                 job.getContentRevision(), result.ocrText(), result.observedEvidence(),
-                result.searchText(), result.embedding(), result.embeddingModelVersion());
+                result.searchText());
             finishSucceeded(job, dto);
         });
     }

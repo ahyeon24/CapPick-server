@@ -8,12 +8,13 @@ import java.util.List;
 // analysisRevision: API 명세는 서버가 이 값을 만든다고만 되어 있고 규칙은 없다 — 서버가 캡처
 // 이력을 갖고 있지 않으니 요청에 실린 content_revision을 그대로 돌려주는 것으로 해석했다
 // (JobService 참고). 서버 계약이 구체화되면 확인이 필요하다.
+//
+// 2026-10-08: embedding·embedding_model_version을 뺐다(API 명세 v0.2 §4와 달라진 지점) — 검색을
+// 기기에서 처리하기로 하면서 검색 벡터도 앱이 번들된 모델로 직접 만든다.
 public record ContentAnalysisResultDTO(
     int analysisRevision,
     String ocrText,
     List<String> observedEvidence,
-    String searchText,
-    List<Double> embedding,
-    String embeddingModelVersion
+    String searchText
 ) {
 }

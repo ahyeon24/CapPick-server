@@ -39,21 +39,14 @@ class GeminiContentAnalysisClientTest {
     }
 
     @Test
-    void analyzeCallsGenerateContentThenEmbedContentAndAssemblesResult() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+    void analyzeCallsGenerateContentOnceAndAssemblesResult() {
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
             .andExpect(header("x-goog-api-key", CONFIGURED_KEY))
             .andRespond(withSuccess("""
                 {"candidates":[{"content":{"parts":[{"text":"{\\"ocr_text\\":\\"실습 1\\",\\"observed_evidence\\":[\\"행렬곱 문제\\"],\\"search_text\\":\\"알고리즘 실습 자료\\"}"}]}}]}
-                """, MediaType.APPLICATION_JSON));
-
-        server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"))
-            .andExpect(header("x-goog-api-key", CONFIGURED_KEY))
-            .andRespond(withSuccess("""
-                {"embedding":{"values":[0.1,0.2,0.3]}}
                 """, MediaType.APPLICATION_JSON));
 
         ContentAnalysisResult result = client.analyze(
@@ -63,14 +56,12 @@ class GeminiContentAnalysisClientTest {
         assertEquals("알고리즘 실습 자료", result.searchText());
         assertEquals(1, result.observedEvidence().size());
         assertEquals("행렬곱 문제", result.observedEvidence().get(0));
-        assertEquals(java.util.List.of(0.1, 0.2, 0.3), result.embedding());
-        assertEquals("gemini-embedding-001", result.embeddingModelVersion());
         server.verify();
     }
 
     @Test
     void clientOcrHintIsReturnedAsIsAndModelIsNotAskedForOcrText() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
@@ -79,12 +70,6 @@ class GeminiContentAnalysisClientTest {
             .andRespond(withSuccess("""
                 {"candidates":[{"content":{"parts":[{"text":"{\\"observed_evidence\\":[\\"행렬곱 문제\\"],\\"search_text\\":\\"알고리즘 실습 자료\\"}"}]}}]}
                 """, MediaType.APPLICATION_JSON));
-        server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"))
-            .andRespond(withSuccess("""
-                {"embedding":{"values":[0.1]}}
-                """, MediaType.APPLICATION_JSON));
-
         ContentAnalysisResult result = client.analyze(
             new ContentAnalysisRequest(new byte[]{1, 2, 3}, "image/jpeg", "기기에서 읽은 글자"));
 
@@ -96,7 +81,7 @@ class GeminiContentAnalysisClientTest {
 
     @Test
     void blankClientOcrHintFallsBackToModelOcr() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
@@ -104,12 +89,6 @@ class GeminiContentAnalysisClientTest {
             .andRespond(withSuccess("""
                 {"candidates":[{"content":{"parts":[{"text":"{\\"ocr_text\\":\\"모델이 읽은 글자\\",\\"observed_evidence\\":[],\\"search_text\\":\\"s\\"}"}]}}]}
                 """, MediaType.APPLICATION_JSON));
-        server.expect(requestTo(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"))
-            .andRespond(withSuccess("""
-                {"embedding":{"values":[0.1]}}
-                """, MediaType.APPLICATION_JSON));
-
         ContentAnalysisResult result = client.analyze(
             new ContentAnalysisRequest(new byte[]{1}, "image/jpeg", "  "));
 
@@ -119,7 +98,7 @@ class GeminiContentAnalysisClientTest {
 
     @Test
     void missingApiKeyFailsFastWithoutCallingNetwork() {
-        setUp(new GeminiProperties("", "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+        setUp(new GeminiProperties("", "gemini-flash-latest", "unused-classification-model"));
 
         assertThrows(ContentAnalysisException.class, () -> client.analyze(
             new ContentAnalysisRequest(new byte[]{1}, "image/png", null)));
@@ -127,7 +106,7 @@ class GeminiContentAnalysisClientTest {
 
     @Test
     void serverErrorIsWrappedAsContentAnalysisException() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))
@@ -139,7 +118,7 @@ class GeminiContentAnalysisClientTest {
 
     @Test
     void malformedJsonInTextPartIsWrappedAsContentAnalysisException() {
-        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "gemini-embedding-001", "unused-classification-model"));
+        setUp(new GeminiProperties(CONFIGURED_KEY, "gemini-flash-latest", "unused-classification-model"));
 
         server.expect(requestTo(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"))

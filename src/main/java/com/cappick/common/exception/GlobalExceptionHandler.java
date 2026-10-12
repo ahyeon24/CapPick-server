@@ -65,16 +65,6 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "CLASSIFICATION_UNAVAILABLE", "분류 서비스가 일시적으로 불안정합니다.", true);
     }
 
-    @ExceptionHandler(SearchModelMismatchException.class)
-    public ResponseEntity<ApiErrorResponse> handleSearchModelMismatch(SearchModelMismatchException e) {
-        return error(HttpStatus.CONFLICT, "SEARCH_MODEL_MISMATCH", "검색 임베딩 모델 버전이 서버와 다릅니다.", false);
-    }
-
-    @ExceptionHandler(SearchInterpretationException.class)
-    public ResponseEntity<ApiErrorResponse> handleSearchInterpretationFailed(SearchInterpretationException e) {
-        return error(HttpStatus.SERVICE_UNAVAILABLE, "SEARCH_UNAVAILABLE", "검색 서비스가 일시적으로 불안정합니다.", true);
-    }
-
     @ExceptionHandler(DeletionRequestNotFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleDeletionRequestNotFound(DeletionRequestNotFoundException e) {
         return error(HttpStatus.NOT_FOUND, "DELETION_NOT_FOUND", "삭제 요청을 찾을 수 없습니다.", false);
