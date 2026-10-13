@@ -1,6 +1,7 @@
 package com.cappick.domain.usage;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,4 +22,9 @@ public interface UsageEntryRepository extends JpaRepository<UsageEntry, String> 
     // 엔트리도 포함한다 — Gemini가 실패 응답도 요청 자체는 받은 걸로 카운트할 가능성이 있어(확인
     // 안 됨) 안전한 쪽(과소평가 대신 과대평가)으로 셌다.
     long countByCategoryAndCreatedAtGreaterThanEqual(UsageCategory category, Instant since);
+
+    // 설치별 한도용(UsageService.requireInstallationQuotaAvailable). 하루 예산 가드와 달리
+    // RELEASED(실패)는 세지 않는다 — 실패한 분석이 사용자의 한도를 깎으면 안 된다.
+    long countByInstallationAndCategoryAndStateIn(
+        Installation installation, UsageCategory category, Collection<UsageEntryState> states);
 }

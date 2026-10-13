@@ -32,9 +32,14 @@ public class UsageController {
         Installation installation = installationService.resolveByCredential(credential);
 
         List<UsageCategorySummaryDTO> categories = usageService.usageSummary(installation).stream()
-            .map(summary -> new UsageCategorySummaryDTO(
-                summary.category(), summary.usedUnits(), summary.reservedUnits(),
-                null, null, true))
+            .map(summary -> {
+                // 설치별 한도가 있는 카테고리만 limit_units를 채운다. resets_at은 주기적으로
+                // 초기화되는 한도가 아니라서 null이다.
+                Integer limit = usageService.installationQuotaLimit(summary.category()).orElse(null);
+                boolean canSubmit = limit == null || summary.usedUnits() + summary.reservedUnits() < limit;
+                return new UsageCategorySummaryDTO(
+                    summary.category(), summary.usedUnits(), summary.reservedUnits(), limit, null, canSubmit);
+            })
             .toList();
         return new UsageResponse(categories);
     }

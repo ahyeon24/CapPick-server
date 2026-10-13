@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.cappick.common.exception.DailyBudgetExhaustedException;
+import com.cappick.common.exception.QuotaExceededException;
 import com.cappick.domain.installation.Installation;
 
 @Service
@@ -26,11 +27,15 @@ public class UsageService {
 
     private final UsageEntryRepository usageEntries;
     private final UsageBudgetProperties budget;
+    private final UsageQuotaProperties quota;
     private final Clock clock;
 
-    public UsageService(UsageEntryRepository usageEntries, UsageBudgetProperties budget, Clock clock) {
+    public UsageService(
+        UsageEntryRepository usageEntries, UsageBudgetProperties budget, UsageQuotaProperties quota, Clock clock
+    ) {
         this.usageEntries = usageEntries;
         this.budget = budget;
+        this.quota = quota;
         this.clock = clock;
     }
 
@@ -89,6 +94,30 @@ public class UsageService {
                 throw new DailyBudgetExhaustedException(category.toJson());
             }
         });
+    }
+
+    /**
+     * 이 설치가 지금까지 예약·확정한 건수가 설치별 한도({@link UsageQuotaProperties}) 이상이면
+     * 거부한다. 진행 중(RESERVED)도 세는 이유는 동시에 여러 건을 제출해 한도를 넘기는 걸 막기
+     * 위해서고, 실패(RELEASED)는 세지 않는다. 하루가 지나도 풀리지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public void requireInstallationQuotaAvailable(Installation installation, UsageCategory category) {
+        quota.limitFor(category).ifPresent(limit -> {
+            if (countTowardQuota(installation, category) >= limit) {
+                throw new QuotaExceededException(category.toJson());
+            }
+        });
+    }
+
+    /** 설치별 한도. 한도가 없는 카테고리는 빈 값. */
+    public Optional<Integer> installationQuotaLimit(UsageCategory category) {
+        return quota.limitFor(category);
+    }
+
+    private long countTowardQuota(Installation installation, UsageCategory category) {
+        return usageEntries.countByInstallationAndCategoryAndStateIn(
+            installation, category, List.of(UsageEntryState.RESERVED, UsageEntryState.CONFIRMED));
     }
 
     private Instant startOfTodayInResetZone() {

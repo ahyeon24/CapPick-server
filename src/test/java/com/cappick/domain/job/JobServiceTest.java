@@ -93,6 +93,7 @@ class JobServiceTest {
         verify(worker).run(eq(submitted.jobId()), eq(image), eq("image/jpeg"), eq((String) null));
         verify(usageService).reserve(installation, "key-1", UsageCategory.CONTENT_ANALYSIS, 1);
         verify(usageService).requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS);
+        verify(usageService).requireInstallationQuotaAvailable(installation, UsageCategory.CONTENT_ANALYSIS);
     }
 
     @Test

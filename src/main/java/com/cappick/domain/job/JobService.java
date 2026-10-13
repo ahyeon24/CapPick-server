@@ -80,6 +80,8 @@ public class JobService {
             return new JobSubmitted(job.getId(), job.getStatus(), POLL_AFTER_SECONDS);
         }
         // 멱등 재제출(위 existing 분기)은 예산을 새로 쓰지 않으니 가드 대상이 아니다 — 진짜 새 Job만 확인한다.
+        // 설치별 한도를 먼저 본다 — 둘 다 걸렸을 때 "내일 다시"가 아니라 "한도 도달"로 답해야 한다.
+        usageService.requireInstallationQuotaAvailable(installation, UsageCategory.CONTENT_ANALYSIS);
         usageService.requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS);
 
         Job job = Job.builder()

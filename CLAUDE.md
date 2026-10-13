@@ -1,6 +1,6 @@
 # CapPick-server
 
-CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CLAUDE.md`와 `../docs/`를 먼저 참고한다. 서버의 책임 범위와 저장 경계는 특히 `../docs/cappick-system-design-v0.2.md`, 엔터티는 `../docs/cappick-erd-v0.2.md` §4, API 계약은 `../docs/cappick-api-spec-v0.2.md`를 따른다.
+CapPick의 API 서버(Spring Boot, Java). 제품 배경·기능 사양은 `../CLAUDE.md`와 `../docs/`를 먼저 참고한다. 서버의 책임 범위와 저장 경계는 특히 `../docs/cappick-system-design-v0.3.md`, 엔터티는 `../docs/cappick-erd-v0.2.md` §4, API 계약은 `../docs/cappick-api-spec-v0.3.md`를 따른다.
 
 ## 현재 상태
 
@@ -237,8 +237,8 @@ folder_id 제거 케이스 포함). **실제 Gemini 응답으로 검증한 적�
 `SearchInterpretationException`·`SearchModelMismatchException`과 그 핸들러,
 `GeminiContentAnalysisClient`의 embedContent 호출, `ContentAnalysisResult(DTO)`의 `embedding`·
 `embedding_model_version`, `GeminiProperties.embeddingModel`·`cappick.ai.gemini.embedding-model`.
-**캡처 한 장에 Gemini 호출은 이제 generateContent 한 번뿐이다.** API 명세 v0.2 §4(결과에
-embedding 포함)·§6(search/prepare)과 달라졌으니 문서 개정 때 반영해야 한다. 테스트 125개 통과
+**캡처 한 장에 Gemini 호출은 이제 generateContent 한 번뿐이다.** 이 변경은 2026-10-12에
+API 명세 v0.3·시스템 설계 v0.3으로 문서에 반영했다(v0.2 파일은 보존). 테스트 125개 통과
 (검색 관련 8개 삭제). 아래 "검색어 해석" 절과 이 문서 곳곳의 embedding 언급은 제거 전 기록이다.
 
 ## 검색어 해석 (`POST /v1/search/prepare`, 2026-09-22) — 2026-10-08 제거됨
@@ -396,6 +396,26 @@ Gemini RPD 리셋 시각인 **태평양 시간 자정**이다(서버 자체는 U
 **테스트 (5개 추가, 총 130개)**: `UsageServiceTest`(3, 한도 미설정 시 통과·한도 이내 통과·한도
 도달 시 예외), `JobServiceTest`(2, 두 kind 모두 제출 시 가드 호출 검증 + content_analysis
 예산 소진 시 Job 미생성 확인).
+
+## 설치별 분석 한도 (`UsageQuotaProperties`, 2026-10-13)
+
+`cappick.usage.installation-quota.content-analysis=100` — 설치 하나가 분석할 수 있는 총 장수.
+넘으면 `JobService.submitContentAnalysis`가 429 `QUOTA_EXCEEDED`(재시도 불가)로 거부한다.
+**지금 값 100은 사용자가 실제 기기에서 혼자 테스트하려고 임의로 정한 임시 한도다**(무료 Gemini
+한도가 하루 약 200장이라 그 안에서 끝나게). 동시에 유료 전환 때 "처음 N장 무료"의 N이 들어갈
+자리이기도 하다 — 사용자는 최근 스크린샷 몇백 장을 무료로 주려 하고(장수 미정, 300장을
+제안해 둠), 결제 후 한도 증액·재설치 우회 방지(DeviceCheck)·무료분 소진 뒤 새 캡처 처리는 전부
+미정이다.
+
+- 세는 것: 이 설치의 content_analysis `UsageEntry` 중 RESERVED·CONFIRMED(실패해서 RELEASED된
+  건 안 센다). 이미 분석된 캡처를 "다시 분석하기"로 돌리면 한 건 더 센다.
+- 전체 하루 예산 가드(위 절)와는 별개다: 그쪽은 전체 설치 합산·하루 단위·AI 공급자 한도 보호,
+  이쪽은 설치별·평생·제품 정책. 설치별 한도를 먼저 확인한다.
+- 분류(classification)에는 한도가 없다 — 이미 분석된 캡처에만 나가기 때문.
+- `GET /v1/usage`의 content_analysis 항목에 `limit_units`(한도)와 `can_submit`이 채워진다.
+- 값을 올리면 앱은 멈춘 곳에서 이어서 분석한다(앱 쪽 동작은 `CapPick-ios/CLAUDE.md` 참고).
+- 검증: 테스트 4개 추가(총 129개 통과). 시뮬레이터 E2E — 한도를 "지금 사용량+1"로 띄우고 새
+  스크린샷 3장을 넣으니 1장만 분석되고 2장은 pending으로 남았다.
 
 ## 코딩 컨벤션
 

@@ -80,6 +80,11 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.TOO_MANY_REQUESTS, "DAILY_BUDGET_EXHAUSTED", "오늘 처리 가능한 요청을 모두 사용했습니다. 내일 다시 시도해 주세요.", true);
     }
 
+    @ExceptionHandler(QuotaExceededException.class)
+    public ResponseEntity<ApiErrorResponse> handleQuotaExceeded(QuotaExceededException e) {
+        return error(HttpStatus.TOO_MANY_REQUESTS, "QUOTA_EXCEEDED", "분석 한도에 도달했습니다.", false);
+    }
+
     private ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message, boolean retryable) {
         String requestId = "req_" + UUID.randomUUID();
         return ResponseEntity.status(status).body(new ApiErrorResponse(new ApiErrorBody(code, message, retryable), requestId));

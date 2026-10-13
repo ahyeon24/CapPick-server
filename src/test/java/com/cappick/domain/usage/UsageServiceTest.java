@@ -1,5 +1,7 @@
 package com.cappick.domain.usage;
 
+import com.cappick.common.exception.QuotaExceededException;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -37,7 +39,7 @@ class UsageServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new UsageService(usageEntries, new UsageBudgetProperties(null, null), Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new UsageService(usageEntries, new UsageBudgetProperties(null, null), new UsageQuotaProperties(null), Clock.fixed(NOW, ZoneOffset.UTC));
         installation = Installation.builder()
             .id("i1").credentialHash("h").keyId("k").publicKeyBase64("pk").createdAt(NOW)
             .build();
@@ -128,7 +130,7 @@ class UsageServiceTest {
     @Test
     void requireDailyBudgetAvailablePassesWhenUnderLimit() {
         UsageService limited = new UsageService(
-            usageEntries, new UsageBudgetProperties(18, null), Clock.fixed(NOW, ZoneOffset.UTC));
+            usageEntries, new UsageBudgetProperties(18, null), new UsageQuotaProperties(null), Clock.fixed(NOW, ZoneOffset.UTC));
         when(usageEntries.countByCategoryAndCreatedAtGreaterThanEqual(eq(UsageCategory.CONTENT_ANALYSIS), any()))
             .thenReturn(17L);
 
@@ -138,11 +140,51 @@ class UsageServiceTest {
     @Test
     void requireDailyBudgetAvailableThrowsWhenLimitReached() {
         UsageService limited = new UsageService(
-            usageEntries, new UsageBudgetProperties(18, null), Clock.fixed(NOW, ZoneOffset.UTC));
+            usageEntries, new UsageBudgetProperties(18, null), new UsageQuotaProperties(null), Clock.fixed(NOW, ZoneOffset.UTC));
         when(usageEntries.countByCategoryAndCreatedAtGreaterThanEqual(eq(UsageCategory.CONTENT_ANALYSIS), any()))
             .thenReturn(18L);
 
         assertThrows(DailyBudgetExhaustedException.class,
             () -> limited.requireDailyBudgetAvailable(UsageCategory.CONTENT_ANALYSIS));
+    }
+
+    @Test
+    void requireInstallationQuotaAvailablePassesWhenNoQuotaConfigured() {
+        service.requireInstallationQuotaAvailable(installation, UsageCategory.CONTENT_ANALYSIS); // no exception
+    }
+
+    @Test
+    void requireInstallationQuotaAvailableCountsOnlyReservedAndConfirmedForThisInstallation() {
+        UsageService limited = new UsageService(
+            usageEntries, new UsageBudgetProperties(null, null), new UsageQuotaProperties(100),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+        when(usageEntries.countByInstallationAndCategoryAndStateIn(
+            installation, UsageCategory.CONTENT_ANALYSIS, List.of(UsageEntryState.RESERVED, UsageEntryState.CONFIRMED)))
+            .thenReturn(99L);
+
+        limited.requireInstallationQuotaAvailable(installation, UsageCategory.CONTENT_ANALYSIS); // no exception
+    }
+
+    @Test
+    void requireInstallationQuotaAvailableThrowsWhenQuotaReached() {
+        UsageService limited = new UsageService(
+            usageEntries, new UsageBudgetProperties(null, null), new UsageQuotaProperties(100),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+        when(usageEntries.countByInstallationAndCategoryAndStateIn(
+            installation, UsageCategory.CONTENT_ANALYSIS, List.of(UsageEntryState.RESERVED, UsageEntryState.CONFIRMED)))
+            .thenReturn(100L);
+
+        assertThrows(QuotaExceededException.class,
+            () -> limited.requireInstallationQuotaAvailable(installation, UsageCategory.CONTENT_ANALYSIS));
+    }
+
+    @Test
+    void classificationHasNoInstallationQuota() {
+        UsageService limited = new UsageService(
+            usageEntries, new UsageBudgetProperties(null, null), new UsageQuotaProperties(100),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+        limited.requireInstallationQuotaAvailable(installation, UsageCategory.CLASSIFICATION); // no exception
+        assertEquals(Optional.empty(), limited.installationQuotaLimit(UsageCategory.CLASSIFICATION));
     }
 }
